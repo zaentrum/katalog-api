@@ -1,0 +1,72 @@
+openapi: 3.1.0
+info:
+  title: katalog-api
+  version: 0.0.1
+  description: |
+    Read-only catalog REST surface for the zaentrum platform.
+servers:
+  - url: https://katalog-api.example.com
+paths:
+  /healthz:
+    get:
+      summary: Liveness probe
+      responses:
+        "200":
+          description: ok
+  /api/v1/items:
+    get:
+      summary: List catalog items
+      parameters:
+        - in: query
+          name: cursor
+          schema:
+            type: string
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            default: 50
+      responses:
+        "200":
+          description: A page of items
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ItemPage"
+  /api/v1/items/{id}:
+    get:
+      summary: Get one catalog item by id
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Item
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Item"
+        "404":
+          description: Not found
+components:
+  schemas:
+    Item:
+      type: object
+      required: [id]
+      properties:
+        id:
+          type: string
+        title:
+          type: string
+    ItemPage:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Item"
+        nextCursor:
+          type: string

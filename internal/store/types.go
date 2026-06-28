@@ -1,0 +1,111 @@
+package store
+
+// Item is the wire shape of a catalog item served by katalog-api.
+//
+// Field names follow the *clean REST* convention used by chino-api's
+// `Item` struct (snake_case, no nested OData associations). That way
+// chino-api's eventual refactor away from manager-api OData is a base
+// URL change plus a small parser tweak — not a re-design of its
+// internal models.
+type Item struct {
+	ID            string  `json:"id"`
+	Type          string  `json:"type"`
+	Title         string  `json:"title"`
+	SortTitle     string  `json:"sort_title,omitempty"`
+	Year          *int    `json:"year,omitempty"`
+	Rating        float64 `json:"rating,omitempty"`
+	Description   string  `json:"description,omitempty"`
+	Tagline       string  `json:"tagline,omitempty"`
+	DurationMs    int64   `json:"duration_ms,omitempty"`
+	SeasonNumber  *int    `json:"season_number,omitempty"`
+	EpisodeNumber *int    `json:"episode_number,omitempty"`
+	ParentID      string  `json:"parent_id,omitempty"`
+
+	// Optional rich associations populated by GetItemWithIncludes when
+	// the caller asks for them via `?include=`. Always nil/empty on
+	// list endpoints — those return only the core item fields.
+	Genres    []string    `json:"genres,omitempty"`
+	Cast      []CastEntry `json:"cast,omitempty"`
+	Subtitles []Subtitle  `json:"subtitles,omitempty"`
+	Trailers  []Trailer   `json:"trailers,omitempty"`
+	Segments  *SegSummary `json:"segments,omitempty"`
+}
+
+// CastEntry mirrors chino-api's CastEntry: a flat name+role pair from
+// the (people, itempeople) join. Director/composer/actor share the
+// same row shape — the role discriminator drives client-side rendering.
+type CastEntry struct {
+	// PersonID lets clients deep-link a cast chip to that person's
+	// filmography (GET /people/{id}).
+	PersonID string `json:"person_id,omitempty"`
+	Name     string `json:"name"`
+	Role     string `json:"role"`
+}
+
+// Subtitle mirrors chino-api's Subtitle. Both bear/srt/vtt + the
+// `default` flag the client uses to pre-select on player start.
+type Subtitle struct {
+	ID      string `json:"id"`
+	Lang    string `json:"lang,omitempty"`
+	Label   string `json:"label,omitempty"`
+	Format  string `json:"format,omitempty"`
+	Default bool   `json:"default,omitempty"`
+}
+
+// Trailer mirrors chino-api's Trailer. site+externalId is enough for
+// chino-web to embed a YouTube iframe; url is the canonical link the
+// crawler will fetch later.
+type Trailer struct {
+	Site       string `json:"site,omitempty"`
+	ExternalID string `json:"external_id,omitempty"`
+	URL        string `json:"url,omitempty"`
+	Title      string `json:"title,omitempty"`
+}
+
+// SegSummary is the rollup chino-web's player uses to decide whether to
+// show Skip-Intro / Skip-Credits / Skip-Recap buttons. Count is the
+// total segment count regardless of kind.
+type SegSummary struct {
+	Count      int  `json:"count"`
+	HasIntro   bool `json:"has_intro"`
+	HasCredits bool `json:"has_credits"`
+	HasRecap   bool `json:"has_recap"`
+}
+
+// Segment is the wire shape of one MediaSegments row, returned by
+// /api/v1/items/{id}/segments. The player uses these to wire the
+// timeline markers + skip buttons.
+type Segment struct {
+	ID         string  `json:"id"`
+	Kind       string  `json:"kind"`
+	StartMs    int64   `json:"start_ms"`
+	EndMs      int64   `json:"end_ms"`
+	Source     string  `json:"source,omitempty"`
+	Confidence float64 `json:"confidence,omitempty"`
+	Label      string  `json:"label,omitempty"`
+}
+
+// ListResult is the paginated envelope every list endpoint returns.
+// `Total` is the unfiltered match count so chino-web can render the
+// "Showing 1-50 of 1976" footer without a second round-trip.
+type ListResult struct {
+	Items  []Item `json:"items"`
+	Total  int    `json:"total"`
+	Limit  int    `json:"limit"`
+	Offset int    `json:"offset"`
+}
+
+// ListOpts is the common set of list-endpoint parameters. Year +
+// Rating use pointers so the zero value is "not set" without having
+// to special-case 0.
+type ListOpts struct {
+	Type     string // 'movie' | 'series' | 'episode' | 'album' | …
+	Query    string // FTS query (search_vector @@ websearch_to_tsquery)
+	YearMin  *int
+	YearMax  *int
+	RatingMin *float64
+	Genre    string // genre name (case-sensitive equality)
+	Sort     string // 'rating' | 'year' | 'title' | 'newest' | '' (default by sortTitle)
+	Limit    int    // clamped to [1, 200], default 50
+	Offset   int    // clamped to >=0, default 0
+}

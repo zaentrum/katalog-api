@@ -1,0 +1,68 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: katalog-api
+  namespace: stube
+  labels:
+    app: katalog-api
+    value-stream: stube
+    role: catalog-read
+    env: beta
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: katalog-api
+  template:
+    metadata:
+      labels:
+        app: katalog-api
+        value-stream: stube
+        role: catalog-read
+        env: beta
+    spec:
+      containers:
+        - name: katalog-api
+          image: zaentrum/katalog-api:latest
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: KATALOG_API_ADDR
+              value: ":8080"
+            - name: KATALOG_API_OIDC_ISSUER
+              value: "https://sso.example.com/realms/your-realm"
+            - name: KATALOG_API_OIDC_AUDIENCE
+              value: "katalog,chino-web,tv-web-beta,musig-web-beta"
+            - name: DB_USER
+              valueFrom:
+                secretKeyRef:
+                  name: katalog-ro-db
+                  key: user
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: katalog-ro-db
+                  key: password
+            - name: KATALOG_API_PG_URL
+              value: "postgres://$(DB_USER):$(DB_PASSWORD)@postgres.example.com:5432/katalog?sslmode=require"
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
