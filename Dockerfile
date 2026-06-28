@@ -9,7 +9,7 @@ RUN go mod download || true
 COPY . .
 RUN CGO_ENABLED=0 GOOS=linux go build -o /out/katalog-api ./cmd/server
 
-FROM ${BASE}distroless/static-debian12:nonroot
+FROM gcr.io/distroless/static-debian12:nonroot
 WORKDIR /
 COPY --from=build /out/katalog-api /katalog-api
 USER nonroot:nonroot
