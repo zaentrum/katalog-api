@@ -37,12 +37,14 @@ func main() {
 	}
 	defer st.Close()
 
+	// NewVerifier is non-fatal on an unreachable issuer: it returns a live
+	// verifier that fails closed and retries OIDC discovery in the background
+	// (so a cold Keycloak at boot self-heals instead of permanently disabling
+	// auth). An error here means a real config problem (empty issuer/audiences)
+	// — still let the service come up so /healthz can answer.
 	verifier, err := auth.NewVerifier(ctx, cfg.OIDCIssuer, cfg.OIDCAudience)
 	if err != nil {
-		// Don't fatal in scaffold — let the service come up even if SSO is
-		// unreachable so /healthz can answer. Real wiring will go strict
-		// once endpoints land.
-		slog.Warn("oidc verifier init failed; auth middleware will reject all requests", "err", err)
+		slog.Warn("oidc verifier misconfigured; auth middleware will reject all requests", "err", err)
 	}
 
 	router, err := katalogapihttp.NewRouter(cfg, st, verifier)
