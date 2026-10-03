@@ -150,6 +150,9 @@ func TestPersonHasProfileMeansAPrimaryPortrait(t *testing.T) {
 func TestPersonOnACatalogOlderThan030(t *testing.T) {
 	st, db := open(t)
 	adaExample(t, db)
+	// Before 032 nothing keeps a credit from being entered twice; it is
+	// still one role on one card, and one title.
+	credit(t, db, "m-old", "Ada Example", "director")
 	ctx := context.Background()
 
 	pd, err := st.GetPerson(ctx, "ada-example", 0, []string{"de"})
@@ -161,10 +164,10 @@ func TestPersonOnACatalogOlderThan030(t *testing.T) {
 	if want := (PersonDetail{Person: Person{ID: "ada-example", Name: "Ada Example"}}); !reflect.DeepEqual(got, want) {
 		t.Errorf("before 030: %+v, want %+v", got, want)
 	}
-	if f := filmography(pd); len(f) != 3 || f[1] != "m-mid:actor,writer,composer,animator" {
-		t.Errorf("before 030: filmography %q", f)
+	if f, want := filmography(pd), []string{"s-new:actor,creator", "m-mid:actor,writer,composer,animator", "m-old:director"}; !reflect.DeepEqual(f, want) {
+		t.Errorf("before 030: filmography %q, want %q", f, want)
 	}
-	// Seven credits on three titles: credits counts the titles.
+	// Eight credits on three titles: credits counts the titles.
 	people, err := st.SearchPeople(ctx, "example", 0)
 	if err != nil || len(people) != 1 || people[0].HasProfile || people[0].Credits != 3 {
 		t.Fatalf("before 030: search %+v, %v; want Ada, 3 titles, no portrait", people, err)
