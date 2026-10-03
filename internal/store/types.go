@@ -31,15 +31,27 @@ type Item struct {
 	Segments  *SegSummary `json:"segments,omitempty"`
 }
 
-// CastEntry mirrors chino-api's CastEntry: a flat name+role pair from
-// the (people, itempeople) join. Director/composer/actor share the
-// same row shape — the role discriminator drives client-side rendering.
+// CastEntry mirrors chino-api's CastEntry: one credit from the (people,
+// itempeople) join. Actor/director/writer/… share the same row shape — the
+// role discriminator drives client-side rendering. Role is an open
+// vocabulary token (see creditRoles for the well-known ones); a client shows
+// the ones it knows and may skip the rest.
 type CastEntry struct {
 	// PersonID lets clients deep-link a cast chip to that person's
 	// filmography (GET /people/{id}).
 	PersonID string `json:"person_id,omitempty"`
 	Name     string `json:"name"`
 	Role     string `json:"role"`
+	// Job is the credit's job title within the role ("Screenplay",
+	// "Executive Producer"). Empty when the catalog does not know it.
+	Job string `json:"job,omitempty"`
+	// Character is the part an actor plays.
+	Character string `json:"character,omitempty"`
+	// Order is the billing order within the role, 0 first; nil when the
+	// catalog has none. A pointer, so 0 is sent.
+	Order *int `json:"order,omitempty"`
+	// EpisodeCount is how many episodes of a series the credit covers.
+	EpisodeCount *int `json:"episode_count,omitempty"`
 }
 
 // Subtitle mirrors chino-api's Subtitle. Both bear/srt/vtt + the

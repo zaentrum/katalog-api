@@ -491,27 +491,87 @@ func (s *Store) listGenresFor(ctx context.Context, itemID string) ([]string, err
 	return out, rows.Err()
 }
 
-// listPeopleFor returns the cast/crew. Sort puts actors first so the
-// detail page's "Starring" chip shows real names, not directors. Caps
-// the list at 16 so a film with 80 listed actors doesn't blow up the
-// JSON payload.
+// creditRoles are the well-known credit roles, in the order a title's credits
+// are listed. A role is an open vocabulary token (^[a-z][a-z0-9-]{0,39}$):
+// one not named here is listed after these, alphabetically.
+var creditRoles = []string{
+	"actor", "creator", "director", "writer",
+	"producer", "composer", "cinematographer", "editor",
+}
+
+// A title's credits are capped per role, so a film that lists eighty actors
+// neither blows up the payload nor crowds out its crew: the first actorCap
+// actors and the first crewCap people of every other role, in billing order.
+const (
+	actorCap = 20
+	crewCap  = 10
+)
+
+// creditColumns are the columns migration 032 adds to a credit
+// (com_nalet_katalog_itempeople): the job ("Screenplay"), the character
+// played, the billing order and, on a series, the number of episodes.
+var creditColumns = []string{"job", "charactername", "ordinal", "episodecount"}
+
+// roleRank is the SQL rank of a role, given the parameter that carries
+// creditRoles: its position in the vocabulary, or one past the end for any
+// other role (which then sort among themselves by name).
+func roleRank(param, role string) string {
+	return "COALESCE(array_position(" + param + "::text[], " + role + "::text), cardinality(" + param + "::text[]) + 1)"
+}
+
+// listPeopleFor returns a title's credits: by role in creditRoles order (other
+// roles after them, alphabetically), within a role by billing order (credits
+// without one last) and then name, at most actorCap actors and crewCap people
+// in each other role. On a catalog older than migration 032 a credit is a
+// person and a role: the fields 032 adds are left out, the order falls back to
+// role and name, and the caps still hold.
 func (s *Store) listPeopleFor(ctx context.Context, itemID string) ([]CastEntry, error) {
+	has, err := s.columns(ctx, "com_nalet_katalog_itempeople", creditColumns...)
+	if err != nil {
+		return nil, err
+	}
+	col := func(name, typ string) string {
+		if has[name] {
+			return "ip." + name
+		}
+		return "NULL::" + typ
+	}
 	rows, err := s.Pool.Query(ctx, `
-		SELECT p.id, p.name, ip.role
-		FROM com_nalet_katalog_itempeople ip
-		JOIN com_nalet_katalog_people p ON p.id = ip.person_id
-		WHERE ip.item_id = $1
-		ORDER BY CASE WHEN ip.role = 'actor' THEN 0 ELSE 1 END, p.name
-		LIMIT 16`, itemID)
+		SELECT person_id, name, role, job, charactername, ordinal, episodecount
+		FROM (
+			SELECT p.id AS person_id, p.name, ip.role,
+			       `+col("job", "text")+` AS job,
+			       `+col("charactername", "text")+` AS charactername,
+			       `+col("ordinal", "integer")+` AS ordinal,
+			       `+col("episodecount", "integer")+` AS episodecount,
+			       `+roleRank("$2", "ip.role")+` AS rank,
+			       row_number() OVER (PARTITION BY ip.role
+			           ORDER BY `+col("ordinal", "integer")+` ASC NULLS LAST, p.name, p.id) AS n
+			FROM com_nalet_katalog_itempeople ip
+			JOIN com_nalet_katalog_people p ON p.id = ip.person_id
+			WHERE ip.item_id = $1
+		) c
+		WHERE n <= CASE WHEN role = 'actor' THEN $3::int ELSE $4::int END
+		ORDER BY rank, role, ordinal ASC NULLS LAST, name, person_id`,
+		itemID, creditRoles, actorCap, crewCap)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	out := []CastEntry{}
 	for rows.Next() {
-		var c CastEntry
-		if err := rows.Scan(&c.PersonID, &c.Name, &c.Role); err != nil {
+		var (
+			c         CastEntry
+			job, char *string
+		)
+		if err := rows.Scan(&c.PersonID, &c.Name, &c.Role, &job, &char, &c.Order, &c.EpisodeCount); err != nil {
 			return nil, err
+		}
+		if job != nil {
+			c.Job = *job
+		}
+		if char != nil {
+			c.Character = *char
 		}
 		out = append(out, c)
 	}
