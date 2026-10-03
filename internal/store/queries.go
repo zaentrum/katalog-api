@@ -668,7 +668,8 @@ type rowScanner interface {
 	Scan(dest ...any) error
 }
 
-func scanItem(r rowScanner) (Item, error) {
+// extra are destinations for columns a query selects after the twelve.
+func scanItem(r rowScanner, extra ...any) (Item, error) {
 	var (
 		it          Item
 		sortTitle   *string
@@ -681,12 +682,12 @@ func scanItem(r rowScanner) (Item, error) {
 		episodeNum  *int
 		parentID    *string
 	)
-	if err := r.Scan(
+	if err := r.Scan(append([]any{
 		&it.ID, &it.Type, &it.Title,
 		&sortTitle, &year, &rating,
 		&description, &tagline, &durationMs,
 		&seasonNum, &episodeNum, &parentID,
-	); err != nil {
+	}, extra...)...); err != nil {
 		return Item{}, err
 	}
 	if sortTitle != nil {

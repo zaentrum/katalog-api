@@ -29,6 +29,10 @@ type Item struct {
 	Subtitles []Subtitle  `json:"subtitles,omitempty"`
 	Trailers  []Trailer   `json:"trailers,omitempty"`
 	Segments  *SegSummary `json:"segments,omitempty"`
+
+	// Roles is set on a person's filmography only (GET /people/{id}): the
+	// person's roles on this item, in credit-list order.
+	Roles []string `json:"roles,omitempty"`
 }
 
 // CastEntry mirrors chino-api's CastEntry: one credit from the (people,

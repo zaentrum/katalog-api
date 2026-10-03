@@ -171,9 +171,12 @@ func (h *ItemsHandler) People(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"people": people, "total": len(people)})
 }
 
-// Person returns a single cast/crew member by id plus their filmography
-// (the items they're credited in, newest first). `?limit=` clamps the
-// filmography (default 100, max 200). 404 when the id doesn't exist.
+// Person returns a single cast/crew member by id, their details, and their
+// filmography (the items they're credited in, newest first, each with the
+// person's roles on it). `?limit=` clamps the filmography (default 100, max
+// 200). The biography comes in the language `?lang=` names, else the first of
+// Accept-Language's the catalog has, else English, else any. 404 when the id
+// doesn't exist.
 func (h *ItemsHandler) Person(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	limit := 100
@@ -182,7 +185,7 @@ func (h *ItemsHandler) Person(w http.ResponseWriter, r *http.Request) {
 			limit = n
 		}
 	}
-	pd, err := h.Store.GetPerson(r.Context(), id, limit)
+	pd, err := h.Store.GetPerson(r.Context(), id, limit, biographyLanguages(r))
 	if writeStoreErr(w, r, "get person", err) {
 		return
 	}
@@ -190,6 +193,8 @@ func (h *ItemsHandler) Person(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "person not found", http.StatusNotFound)
 		return
 	}
+	// The biography's language follows the header when ?lang= is absent.
+	w.Header().Add("Vary", "Accept-Language")
 	writeJSON(w, http.StatusOK, pd)
 }
 
