@@ -99,13 +99,13 @@ type ListResult struct {
 // Rating use pointers so the zero value is "not set" without having
 // to special-case 0.
 type ListOpts struct {
-	Type     string // 'movie' | 'series' | 'episode' | 'album' | …
-	Query    string // FTS query (search_vector @@ websearch_to_tsquery)
-	YearMin  *int
-	YearMax  *int
+	Type      string // 'movie' | 'series' | 'episode' | 'album' | …
+	Query     string // FTS query (search_vector @@ websearch_to_tsquery)
+	YearMin   *int
+	YearMax   *int
 	RatingMin *float64
-	Genre    string // genre name (case-sensitive equality)
-	Sort     string // 'rating' | 'year' | 'title' | 'newest' | '' (default by sortTitle)
-	Limit    int    // clamped to [1, 200], default 50
-	Offset   int    // clamped to >=0, default 0
+	Genre     string // genre name (case-sensitive equality)
+	Sort      string // 'rating' | 'year' | 'title' | 'newest' | '' (default by sortTitle)
+	Limit     int    // clamped to [1, 200], default 50
+	Offset    int    // clamped to >=0, default 0
 }

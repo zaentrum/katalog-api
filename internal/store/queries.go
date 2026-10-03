@@ -167,14 +167,14 @@ func (s *Store) ListItems(ctx context.Context, opts ListOpts) (ListResult, error
 // Score model (cheap V1, sufficient for chino-web's "More like this"
 // row on the detail page — OpenProject #115):
 //
-//   +3 per shared genre
-//   +5 per shared cast member (role='actor' on both sides)
-//   filter: same `type` as the source (movies recommend movies,
-//           series recommend series — cross-type recs read as a bug)
-//   filter: exclude the source item itself and any episodes (we only
-//           recommend top-level titles; the user lands on episodes
-//           from the parent series)
-//   tiebreak: rating DESC NULLS LAST, then id for stability
+//	+3 per shared genre
+//	+5 per shared cast member (role='actor' on both sides)
+//	filter: same `type` as the source (movies recommend movies,
+//	        series recommend series — cross-type recs read as a bug)
+//	filter: exclude the source item itself and any episodes (we only
+//	        recommend top-level titles; the user lands on episodes
+//	        from the parent series)
+//	tiebreak: rating DESC NULLS LAST, then id for stability
 //
 // Watched-history exclusion is intentionally not applied here: the
 // watched_history projection lives on chino-api per-user, so filtering
