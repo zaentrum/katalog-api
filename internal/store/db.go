@@ -15,6 +15,10 @@ import (
 // mutate rows owned by katalog-manager-api.
 type Store struct {
 	Pool *pgxpool.Pool
+
+	// schema is what the store has learnt of the catalog's columns: which of
+	// the ones a migration adds it may read yet (schema.go).
+	schema catalogColumns
 }
 
 // ErrNotFound is returned when an item or asset does not exist.
