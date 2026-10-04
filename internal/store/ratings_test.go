@@ -414,3 +414,26 @@ func TestVisible(t *testing.T) {
 		t.Errorf("uncapped: %q, want every id of a title", got)
 	}
 }
+
+// A capped viewer's search (q, ranked by how well a title matches) leaves out
+// what the cap does not allow, and counts the rest.
+func TestACappedSearch(t *testing.T) {
+	st, db := ratedCatalog(t)
+	// The catalog's search vector, as the base schema keeps it.
+	db.Exec(t, `ALTER TABLE com_nalet_katalog_items ADD COLUMN search_vector tsvector
+		GENERATED ALWAYS AS (to_tsvector('simple', coalesce(title, ''))) STORED`)
+	db.Exec(t, `UPDATE com_nalet_katalog_items SET title = title || ' Night' WHERE id IN ('m0', 'm16', 'mu', 'e1', 'e2')`)
+	for maxAge, want := range map[int]string{0: "m0", 12: "e1 m0", 16: "e1 m0 m16", 18: "e1 e2 m0 m16"} {
+		res, err := st.ListItems(WithMaxAge(context.Background(), maxAge), ListOpts{Query: "night", Limit: 10})
+		if err != nil || idsOf(res.Items) != want || res.Total != len(strings.Fields(want)) {
+			t.Errorf("searching night capped at %d: %q (total %d) %v, want %q", maxAge, idsOf(res.Items), res.Total, err, want)
+		}
+		res, err = st.ListItems(WithMaxAge(context.Background(), maxAge), ListOpts{Type: "movie", Query: "night", Sort: "rating", Limit: 10})
+		if err != nil || idsOf(res.Items) != allowed(maxAge, false, "m0", "m16", "mu") {
+			t.Errorf("searching night among films capped at %d: %q %v", maxAge, idsOf(res.Items), err)
+		}
+	}
+	if res, err := st.ListItems(context.Background(), ListOpts{Query: "night"}); err != nil || res.Total != 5 {
+		t.Errorf("uncapped: %q %d %v", idsOf(res.Items), res.Total, err)
+	}
+}
