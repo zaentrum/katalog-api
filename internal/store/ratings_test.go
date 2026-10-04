@@ -22,6 +22,8 @@ import (
 //	s12:          a series certified 12 in DE, with
 //	  e1:           an episode rated as it
 //	  e2:           an episode an admin rated 18
+//	  e5:           an episode with a rating of its own, 16 in DE, rated
+//	                as its series all the same
 //	s16:          a series certified TV-14 in the US that an admin rated 16, with
 //	  e3:           an episode rated as it
 //	  e4:           an episode an admin rated 6
@@ -42,6 +44,7 @@ func ratedCatalog(t *testing.T) (*Store, *storetest.DB) {
 		{"m0", "movie", "Zero", "", 2000}, {"m12", "movie", "Twelve", "", 2001}, {"m16", "movie", "Sixteen", "", 2002},
 		{"m17", "movie", "Seventeen", "", 2003}, {"mu", "movie", "Unrated", "", 2004}, {"mo", "movie", "Overridden", "", 2005},
 		{"s12", "series", "Kids Show", "", 2006}, {"e1", "episode", "Pilot", "s12", 2006}, {"e2", "episode", "Finale", "s12", 2006},
+		{"e5", "episode", "Its Own", "s12", 2006},
 		{"s16", "series", "Show", "", 2007}, {"e3", "episode", "Opener", "s16", 2007}, {"e4", "episode", "Second", "s16", 2007},
 		{"eo", "episode", "Orphan", "gone", 2008},
 	} {
@@ -57,7 +60,8 @@ func ratedCatalog(t *testing.T) (*Store, *storetest.DB) {
 	db.Exec(t, `INSERT INTO com_nalet_katalog_people (id, name) VALUES ('ada', 'Ada Example')`)
 	db.Exec(t, `UPDATE com_nalet_katalog_items i SET certification = r.c, certification_country = r.country, min_age = r.age
 		FROM (VALUES ('m0', '0', 'DE', 0), ('m12', '12', 'DE', 12), ('m16', '16', 'DE', 16), ('m17', 'R', 'US', 17),
-		             ('mo', '18', 'DE', 18), ('s12', '12', 'DE', 12), ('s16', 'TV-14', 'US', 14)) AS r(id, c, country, age)
+		             ('mo', '18', 'DE', 18), ('s12', '12', 'DE', 12), ('s16', 'TV-14', 'US', 14), ('e5', '16', 'DE', 16))
+		             AS r(id, c, country, age)
 		WHERE i.id = r.id`)
 	db.Exec(t, `UPDATE com_nalet_katalog_items SET min_age_override = o.age
 		FROM (VALUES ('mo', 6), ('e2', 18), ('s16', 16), ('e4', 6)) AS o(id, age) WHERE com_nalet_katalog_items.id = o.id`)
@@ -99,7 +103,7 @@ func TestAnItemSaysWhatItIsRated(t *testing.T) {
 	ctx := context.Background()
 	want := map[string]string{
 		"m0": "0 0 DE", "m12": "12 12 DE", "m16": "16 16 DE", "m17": "17 R US", "mu": "- - -", "mo": "6 - -",
-		"s12": "12 12 DE", "e1": "12 12 DE", "e2": "18 - -", "s16": "16 - -", "e3": "16 - -", "e4": "6 - -", "eo": "- - -",
+		"s12": "12 12 DE", "e1": "12 12 DE", "e2": "18 - -", "s16": "16 - -", "e3": "16 - -", "e4": "6 - -", "e5": "12 12 DE", "eo": "- - -",
 	}
 	for id, w := range want {
 		it, err := st.GetItem(ctx, id)
@@ -122,21 +126,21 @@ func TestAnItemSaysWhatItIsRated(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, w := ratingsOf(list.Items), wantOf("m0", "m12", "m16", "m17", "mu", "mo", "s12", "e1", "e2", "s16", "e3", "e4", "eo"); got != w {
+	if got, w := ratingsOf(list.Items), wantOf("m0", "m12", "m16", "m17", "mu", "mo", "s12", "e1", "e2", "e5", "s16", "e3", "e4", "eo"); got != w {
 		t.Errorf("ListItems:\n got  %s\n want %s", got, w)
 	}
 	eps, err := st.ListEpisodesBySeries(ctx, "s12")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, w := ratingsOf(eps), wantOf("e1", "e2"); got != w {
+	if got, w := ratingsOf(eps), wantOf("e1", "e2", "e5"); got != w {
 		t.Errorf("the episodes of s12:\n got  %s\n want %s", got, w)
 	}
 	pd, err := st.GetPerson(ctx, "ada", 100, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, w := ratingsOf(pd.Items), wantOf("m0", "m12", "m16", "m17", "mu", "mo", "s12", "e1", "e2", "s16", "e3", "e4", "eo"); got != w {
+	if got, w := ratingsOf(pd.Items), wantOf("m0", "m12", "m16", "m17", "mu", "mo", "s12", "e1", "e2", "e5", "s16", "e3", "e4", "eo"); got != w {
 		t.Errorf("Ada's filmography:\n got  %s\n want %s", got, w)
 	}
 	similar, err := st.ListSimilar(ctx, "m12", 50)
@@ -175,7 +179,7 @@ func TestAnItemWithoutRatings(t *testing.T) {
 // ratedAges are the ages the titles of ratedCatalog are held to, as
 // katalog-manager defines them, worked out by hand: -1 is unrated.
 var ratedAges = map[string]int{"m0": 0, "m12": 12, "m16": 16, "m17": 17, "mu": -1, "mo": 6,
-	"s12": 12, "e1": 12, "e2": 18, "s16": 16, "e3": 16, "e4": 6, "eo": -1}
+	"s12": 12, "e1": 12, "e2": 18, "e5": 12, "s16": 16, "e3": 16, "e4": 6, "eo": -1}
 
 // allowed is what a viewer capped at maxAge may be served of ids: a title
 // rated at most the cap, an unrated one when show.
@@ -221,7 +225,7 @@ func TestTheCapLeavesOutWhatItDoesNotAllow(t *testing.T) {
 	st, db := ratedCatalog(t)
 	db.Exec(t, `INSERT INTO com_nalet_katalog_mediasegments (id, item_id, kind, startms, endms, source) VALUES
 		('seg-m12', 'm12', 'intro', 0, 1000, 'manual'), ('seg-m16', 'm16', 'intro', 0, 1000, 'manual')`)
-	everything := []string{"m0", "m12", "m16", "m17", "mu", "mo", "s12", "e1", "e2", "s16", "e3", "e4", "eo"}
+	everything := []string{"m0", "m12", "m16", "m17", "mu", "mo", "s12", "e1", "e2", "e5", "s16", "e3", "e4", "eo"}
 	for _, setting := range []string{"", "hide", "show", "SHOW ", "yes"} {
 		setUnrated(t, st, db, setting)
 		show := strings.EqualFold(strings.TrimSpace(setting), "show")
@@ -230,7 +234,7 @@ func TestTheCapLeavesOutWhatItDoesNotAllow(t *testing.T) {
 			at := fmt.Sprintf("capped at %d, unrated %q", maxAge, setting)
 
 			for typ, ids := range map[string][]string{"": everything, "movie": {"m0", "m12", "m16", "m17", "mu", "mo"},
-				"series": {"s12", "s16"}, "episode": {"e1", "e2", "e3", "e4", "eo"}} {
+				"series": {"s12", "s16"}, "episode": {"e1", "e2", "e5", "e3", "e4", "eo"}} {
 				res, err := st.ListItems(ctx, ListOpts{Type: typ, Limit: 200})
 				if err != nil {
 					t.Fatal(err)
@@ -246,7 +250,7 @@ func TestTheCapLeavesOutWhatItDoesNotAllow(t *testing.T) {
 					t.Errorf("%s, GetItem(%s): %v, want served %v", at, id, err, want)
 				}
 			}
-			for series, eps := range map[string][]string{"s12": {"e1", "e2"}, "s16": {"e3", "e4"}} {
+			for series, eps := range map[string][]string{"s12": {"e1", "e2", "e5"}, "s16": {"e3", "e4"}} {
 				got, err := st.ListEpisodesBySeries(ctx, series)
 				switch {
 				case allowed(maxAge, show, series) == "":
