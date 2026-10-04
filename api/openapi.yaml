@@ -4,6 +4,16 @@ info:
   version: 0.0.1
   description: |
     Read-only catalog REST surface for the zaentrum platform.
+
+    A viewer with a rating cap is served only what the cap allows, on every
+    route behind the bearer: the cap is the stricter of the bearer's
+    `max_rating` claim (a whole number of years) and the `max_rating`
+    parameter a BFF passes. A title rated above it, and one nothing rates
+    unless the catalog's setting `ratings.unrated_for_capped` says `show`, is
+    as if the catalog did not hold it: left out of a list and its total, and
+    404 by id, as an id there is not. An episode is rated as its series
+    unless an admin rated it. A cap that is no whole number of years is the
+    strictest, 0.
 servers:
   - url: https://katalog-api.example.com
 paths:
@@ -16,7 +26,9 @@ paths:
   /api/v1/items:
     get:
       summary: List catalog items
+      security: [{ bearerAuth: [] }]
       parameters:
+        - $ref: "#/components/parameters/MaxRating"
         - in: query
           name: cursor
           schema:
@@ -43,6 +55,7 @@ paths:
           required: true
           schema:
             type: string
+        - $ref: "#/components/parameters/MaxRating"
         - in: query
           name: include
           description: >
@@ -59,16 +72,56 @@ paths:
               schema:
                 $ref: "#/components/schemas/Item"
         "404":
-          description: Not found
+          description: Not found, or a title the viewer's rating cap leaves out
+  /api/v1/visible:
+    get:
+      summary: Which titles a viewer with a rating cap may be served
+      description: >
+        For the requests a stream token authorizes, which carry the viewer's
+        cap but no bearer: the ids asked about, in their order and each once,
+        that name a title a viewer capped at max_rating may be served. An id
+        of no title is left out as one the cap leaves out. It takes no bearer:
+        the Service is in-cluster only, as for the stream services' asset
+        lookups.
+      parameters:
+        - in: query
+          name: ids
+          description: Comma-separated item ids, at most 500; the parameter may repeat.
+          schema:
+            type: string
+        - in: query
+          name: max_rating
+          required: true
+          description: The cap, a whole number of years; anything else is the strictest cap, 0.
+          schema:
+            type: string
+          example: "12"
+      responses:
+        "200":
+          description: The ids the cap allows
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ids]
+                properties:
+                  ids:
+                    type: array
+                    items:
+                      type: string
+        "400":
+          description: No max_rating, or more than 500 ids
   /api/v1/people:
     get:
       summary: Search people by name
       description: >
         Accent- and case-insensitive substring match, ranked exact name, then
         name prefix, then most titles, then name. An empty q answers an empty
-        list.
+        list. For a capped viewer a person's titles are those the cap allows,
+        and one credited in none of them is not found.
       security: [{ bearerAuth: [] }]
       parameters:
+        - $ref: "#/components/parameters/MaxRating"
         - in: query
           name: q
           schema:
@@ -104,7 +157,8 @@ paths:
         one text: in the language `lang` names, else the first language of
         Accept-Language (by quality) the catalog has a text in, else English,
         else the first language that has one. The response varies on
-        Accept-Language.
+        Accept-Language. A capped viewer's filmography leaves out the titles
+        the cap does not allow.
       security: [{ bearerAuth: [] }]
       parameters:
         - in: path
@@ -112,6 +166,7 @@ paths:
           required: true
           schema:
             type: string
+        - $ref: "#/components/parameters/MaxRating"
         - in: query
           name: limit
           description: Filmography size.
@@ -147,6 +202,17 @@ components:
       type: http
       scheme: bearer
       bearerFormat: JWT
+  parameters:
+    MaxRating:
+      in: query
+      name: max_rating
+      description: >
+        The viewer's rating cap, a whole number of years, as a BFF passes it;
+        the stricter of it and the bearer's max_rating claim applies. Anything
+        else is the strictest cap, 0. Every route behind the bearer takes it.
+      schema:
+        type: string
+      example: "12"
   schemas:
     Item:
       type: object
@@ -177,6 +243,26 @@ components:
           type: integer
         parent_id:
           type: string
+        min_age:
+          type: integer
+          minimum: 0
+          maximum: 21
+          description: >
+            The age a viewer must be to be served the title: an admin's rating
+            of it, else (for an episode) its series' rating, else the minimum
+            age its certification means. Omitted when nothing rates it; 0 is
+            sent.
+        certification:
+          type: string
+          description: >
+            The certification the age comes from, as TMDB gives it in its
+            country (an episode's is its series'); omitted when an admin rated
+            the title by hand, or nothing rates it.
+          example: PG-13
+        certification_country:
+          type: string
+          description: The certification's country, ISO 3166-1 alpha-2.
+          example: US
         genres:
           type: array
           items:

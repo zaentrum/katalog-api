@@ -38,6 +38,38 @@ surface is described in [`api/openapi.yaml`](api/openapi.yaml).
 - The portrait itself is served by katalog-manager at
   `/api/artwork/person/{id}/profile`; `has_profile` says whether there is one.
 
+## Ratings and capped viewers
+
+A kid's account is capped at an age. Every route behind the bearer serves a
+viewer at the stricter of the bearer's `max_rating` claim (a whole number of
+years) and the `max_rating` parameter a BFF passes (chino-api passes its
+viewer's on every catalog request); a cap that is no whole number of years is
+the strictest, 0, and a request with neither is served as before. A capped
+viewer is served the titles rated at most the cap: a title's rating is
+katalog-manager's (its migration 036), an admin's `min_age_override`, else for
+an episode its series' rating, else the minimum age the title's certification
+means. A title nothing rates is served to the capped only while the catalog's
+setting `ratings.unrated_for_capped` says `show` (it hides by default; read
+from the settings at most every 30 seconds, and hidden when the role may not
+read them). Whatever the cap leaves out is as if the catalog did not hold it:
+the lists leave it out of the page and the total, a person's filmography and
+search leave it out (and find no one credited in none of what is left), and
+`/items/{id}`, `/items/{id}/segments`, `/items/{id}/similar` and
+`/series/{id}/episodes` answer it 404, as an id there is not. The cap is one
+condition in each query, over the title's rating columns and its parent's
+(joined by primary key); a list of films or series reads their own rating,
+which katalog-manager's `idx_items_rated_age` indexes. On a catalog that rates
+nothing yet, a capped viewer is served nothing.
+
+Every item says what it is rated: `min_age` (omitted when nothing rates it),
+and `certification` with `certification_country`, the certification the age
+comes from ("FSK 12" is `12` in `DE`), an episode's its series'.
+
+`GET /api/v1/visible?ids=a,b&max_rating=12` answers which of the ids a viewer
+at that cap may be served, `{"ids": [...]}` in their order. It is for the
+requests a stream token authorizes, which carry the cap and no bearer, and like
+the asset routes it takes no bearer: the Service is in-cluster only.
+
 ## Catalog schema
 
 The tables belong to katalog-manager, which migrates them while this service
@@ -73,7 +105,8 @@ go test ./...
 The store and handler tests that need PostgreSQL are skipped unless
 `KATALOG_API_TEST_DATABASE_URL` names a database in which they may create
 and drop schemas and roles (each test makes its own schema, with the catalog
-tables before and after the migrations it reads). A throwaway server:
+tables before and after the migrations it reads: 030, 032 and 036). A
+throwaway server:
 
 ```bash
 initdb -D /tmp/pg-katalog-api -U postgres --auth=trust
