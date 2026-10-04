@@ -82,6 +82,9 @@ func (s *Store) hasProfile(ctx context.Context) (string, error) {
 // people table — fast enough today; a `gin (name gin_trgm_ops)` index on
 // com_nalet_katalog_people (owned by katalog-manager-api) is the perf
 // follow-up if name search becomes hot.
+//
+// A capped viewer's credits count the titles the cap allows, and a person
+// credited in none of them is not found (WithMaxAge).
 func (s *Store) SearchPeople(ctx context.Context, q string, limit int) ([]Person, error) {
 	if s == nil || s.Pool == nil {
 		return nil, ErrNoPool
@@ -93,11 +96,28 @@ func (s *Store) SearchPeople(ctx context.Context, q string, limit int) ([]Person
 	if err != nil {
 		return nil, err
 	}
+	// A capped viewer counts the titles the cap allows, and finds no one
+	// credited in none of them.
+	args := []any{q, limit}
+	capped, err := s.capFilter(ctx, false, func(v any) string {
+		args = append(args, v)
+		return fmt.Sprintf("$%d", len(args))
+	})
+	if err != nil {
+		return nil, err
+	}
+	join, where := "", "WHERE"
+	if capped != "" {
+		join = `JOIN com_nalet_katalog_items i ON i.id = ip.item_id
+		LEFT JOIN com_nalet_katalog_items par ON par.id = i.parent_id`
+		where = "WHERE " + capped + " AND"
+	}
 	rows, err := s.Pool.Query(ctx, `
 		SELECT p.id, p.name, count(DISTINCT ip.item_id) AS credits, `+profile+`
 		FROM com_nalet_katalog_people p
 		JOIN com_nalet_katalog_itempeople ip ON ip.person_id = p.id
-		WHERE unaccent(p.name) ILIKE '%' || unaccent($1) || '%'
+		`+join+`
+		`+where+` unaccent(p.name) ILIKE '%' || unaccent($1) || '%'
 		GROUP BY p.id, p.name
 		ORDER BY
 			CASE WHEN lower(unaccent(p.name)) = lower(unaccent($1)) THEN 0
@@ -105,7 +125,7 @@ func (s *Store) SearchPeople(ctx context.Context, q string, limit int) ([]Person
 			     ELSE 2 END,
 			count(DISTINCT ip.item_id) DESC,
 			p.name ASC
-		LIMIT $2`, q, limit)
+		LIMIT $2`, args...)
 	if err != nil {
 		return nil, fmt.Errorf("search people: %w", err)
 	}
@@ -130,7 +150,8 @@ func (s *Store) SearchPeople(ctx context.Context, q string, limit int) ([]Person
 // them with the existing poster-card components.
 //
 // On a catalog older than migration 030 a person is an id and a name: the
-// details are left out and has_profile is false.
+// details are left out and has_profile is false. A capped viewer's
+// filmography leaves out the titles the cap does not allow (WithMaxAge).
 func (s *Store) GetPerson(ctx context.Context, id string, limit int, langs []string) (*PersonDetail, error) {
 	if s == nil || s.Pool == nil {
 		return nil, ErrNoPool
@@ -201,6 +222,17 @@ func (s *Store) GetPerson(ctx context.Context, id string, limit int, langs []str
 	if err != nil {
 		return nil, err
 	}
+	args := []any{id, limit, creditRoles}
+	capped, err := s.capFilter(ctx, false, func(v any) string {
+		args = append(args, v)
+		return fmt.Sprintf("$%d", len(args))
+	})
+	if err != nil {
+		return nil, err
+	}
+	if capped != "" {
+		capped = "WHERE " + capped
+	}
 	rows, err := s.Pool.Query(ctx, `
 		SELECT `+itemColumns+ratingSelect(rated)+`, c.roles
 		FROM (
@@ -211,8 +243,9 @@ func (s *Store) GetPerson(ctx context.Context, id string, limit int, langs []str
 		) c
 		JOIN com_nalet_katalog_items i ON i.id = c.item_id
 		LEFT JOIN com_nalet_katalog_items par ON par.id = i.parent_id
+		`+capped+`
 		ORDER BY i.year DESC NULLS LAST, i.rating DESC NULLS LAST, i.sorttitle ASC NULLS LAST, i.id
-		LIMIT $2`, id, limit, creditRoles)
+		LIMIT $2`, args...)
 	if err != nil {
 		return nil, fmt.Errorf("person filmography: %w", err)
 	}

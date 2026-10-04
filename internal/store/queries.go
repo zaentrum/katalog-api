@@ -20,7 +20,8 @@ import (
 //
 // Filters are parameterized; nothing user-controlled hits the SQL string
 // directly. The Postgres role on the pool is `cloud_katalog_ro` so even
-// a missed-parameterisation bug couldn't mutate state.
+// a missed-parameterisation bug couldn't mutate state. A capped viewer's
+// page and total leave out what the cap does not allow (WithMaxAge).
 func (s *Store) ListItems(ctx context.Context, opts ListOpts) (ListResult, error) {
 	if s == nil || s.Pool == nil {
 		return ListResult{}, ErrNoPool
@@ -72,6 +73,17 @@ func (s *Store) ListItems(ctx context.Context, opts ListOpts) (ListResult, error
 			JOIN com_nalet_katalog_genres g ON g.id = ig.genre_id
 			WHERE ig.item_id = i.id AND g.name = `+add(opts.Genre)+`
 		)`)
+	}
+
+	// A capped viewer is served what its cap allows (capFilter): of films and
+	// series their own rating, which an index serves, of the rest (an
+	// episode) its series' too.
+	capped, err := s.capFilter(ctx, opts.Type == "movie" || opts.Type == "series", add)
+	if err != nil {
+		return ListResult{}, err
+	}
+	if capped != "" {
+		wheres = append(wheres, capped)
 	}
 
 	rated, err := s.rated(ctx)
@@ -196,7 +208,9 @@ func (s *Store) ListItems(ctx context.Context, opts ListOpts) (ListResult, error
 //
 // Returns an empty slice (not ErrNotFound) when the source item exists
 // but has no genre/cast overlap with anything else. Returns
-// ErrNotFound when the source id itself isn't in the items table.
+// ErrNotFound when the source id itself isn't in the items table, or the
+// viewer's cap leaves it out; the cap leaves out what it does not allow of
+// the similar titles too (WithMaxAge).
 func (s *Store) ListSimilar(ctx context.Context, itemID string, limit int) ([]Item, error) {
 	if s == nil || s.Pool == nil {
 		return nil, ErrNoPool
@@ -207,10 +221,21 @@ func (s *Store) ListSimilar(ctx context.Context, itemID string, limit int) ([]It
 
 	// Confirm the source item exists + grab its type. Doing this first
 	// turns "unknown id" into a clean 404 instead of "empty list".
+	// A source the viewer's cap leaves out is not found either.
+	srcArgs := []any{itemID}
+	srcCap, err := s.capFilter(ctx, false, func(v any) string {
+		srcArgs = append(srcArgs, v)
+		return fmt.Sprintf("$%d", len(srcArgs))
+	})
+	if err != nil {
+		return nil, err
+	}
+	srcSQL := `SELECT i.type ` + fromItems + ` WHERE i.id = $1`
+	if srcCap != "" {
+		srcSQL += ` AND ` + srcCap
+	}
 	var srcType string
-	err := s.Pool.QueryRow(ctx,
-		`SELECT type FROM com_nalet_katalog_items WHERE id = $1`, itemID).
-		Scan(&srcType)
+	err = s.Pool.QueryRow(ctx, srcSQL, srcArgs...).Scan(&srcType)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -228,6 +253,17 @@ func (s *Store) ListSimilar(ctx context.Context, itemID string, limit int) ([]It
 	rated, err := s.rated(ctx)
 	if err != nil {
 		return nil, err
+	}
+	args := []any{itemID, srcType, limit}
+	capped, err := s.capFilter(ctx, false, func(v any) string {
+		args = append(args, v)
+		return fmt.Sprintf("$%d", len(args))
+	})
+	if err != nil {
+		return nil, err
+	}
+	if capped != "" {
+		capped = " AND " + capped
 	}
 	similarSQL := `
 		WITH src_genres AS (
@@ -261,13 +297,13 @@ func (s *Store) ListSimilar(ctx context.Context, itemID string, limit int) ([]It
 		  AND i.type = $2
 		  AND i.type <> 'episode'
 		  AND (g.s IS NOT NULL OR p.s IS NOT NULL)
-		  AND (COALESCE(g.s, 0) + COALESCE(p.s, 0)) > 0
+		  AND (COALESCE(g.s, 0) + COALESCE(p.s, 0)) > 0` + capped + `
 		ORDER BY (COALESCE(g.s, 0) + COALESCE(p.s, 0)) DESC,
 		         i.rating DESC NULLS LAST,
 		         i.id
 		LIMIT $3`
 
-	rows, err := s.Pool.Query(ctx, similarSQL, itemID, srcType, limit)
+	rows, err := s.Pool.Query(ctx, similarSQL, args...)
 	if err != nil {
 		return nil, fmt.Errorf("similar items: %w", err)
 	}
@@ -320,7 +356,8 @@ func ParseInclude(raw string) IncludeOpts {
 }
 
 // GetItem returns a single item by id without any associations. Returns
-// ErrNotFound when the id isn't in the catalogue.
+// ErrNotFound when the id isn't in the catalogue, or the viewer's cap leaves
+// it out (WithMaxAge).
 func (s *Store) GetItem(ctx context.Context, id string) (Item, error) {
 	if s == nil || s.Pool == nil {
 		return Item{}, ErrNoPool
@@ -329,8 +366,19 @@ func (s *Store) GetItem(ctx context.Context, id string) (Item, error) {
 	if err != nil {
 		return Item{}, err
 	}
-	row := s.Pool.QueryRow(ctx, `SELECT `+itemColumns+ratingSelect(rated)+` `+fromItems+` WHERE i.id = $1`, id)
-	it, err := scanItem(row)
+	args := []any{id}
+	capped, err := s.capFilter(ctx, false, func(v any) string {
+		args = append(args, v)
+		return fmt.Sprintf("$%d", len(args))
+	})
+	if err != nil {
+		return Item{}, err
+	}
+	q := `SELECT ` + itemColumns + ratingSelect(rated) + ` ` + fromItems + ` WHERE i.id = $1`
+	if capped != "" {
+		q += ` AND ` + capped
+	}
+	it, err := scanItem(s.Pool.QueryRow(ctx, q, args...))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Item{}, ErrNotFound
 	}
@@ -418,18 +466,36 @@ func (s *Store) ListGenres(ctx context.Context) ([]string, error) {
 // are <500 episodes and chino-web shows them in a flat list. Returns
 // an empty slice (not ErrNotFound) when the series has no episodes
 // yet, since the parent series can legitimately exist before any
-// episode has been scanned.
+// episode has been scanned. Returns ErrNotFound when the id names no
+// title, or one the viewer's cap leaves out, whose episodes it leaves
+// out too, as the episodes the cap does not allow (WithMaxAge).
 func (s *Store) ListEpisodesBySeries(ctx context.Context, seriesID string) ([]Item, error) {
 	if s == nil || s.Pool == nil {
 		return nil, ErrNoPool
+	}
+	if ok, err := s.visible(ctx, seriesID); err != nil {
+		return nil, fmt.Errorf("series %s: %w", seriesID, err)
+	} else if !ok {
+		return nil, ErrNotFound
 	}
 	rated, err := s.rated(ctx)
 	if err != nil {
 		return nil, err
 	}
+	args := []any{seriesID}
+	capped, err := s.capFilter(ctx, false, func(v any) string {
+		args = append(args, v)
+		return fmt.Sprintf("$%d", len(args))
+	})
+	if err != nil {
+		return nil, err
+	}
+	if capped != "" {
+		capped = " AND " + capped
+	}
 	rows, err := s.Pool.Query(ctx, `SELECT `+itemColumns+ratingSelect(rated)+` `+fromItems+`
-		WHERE i.type = 'episode' AND i.parent_id = $1
-		ORDER BY i.seasonnumber NULLS LAST, i.episodenumber NULLS LAST, i.id`, seriesID)
+		WHERE i.type = 'episode' AND i.parent_id = $1`+capped+`
+		ORDER BY i.seasonnumber NULLS LAST, i.episodenumber NULLS LAST, i.id`, args...)
 	if err != nil {
 		return nil, fmt.Errorf("episodes for %s: %w", seriesID, err)
 	}
@@ -447,10 +513,16 @@ func (s *Store) ListEpisodesBySeries(ctx context.Context, seriesID string) ([]It
 
 // ListSegments returns the raw MediaSegments rows for an item, ordered
 // by start time. Used by the player to wire timeline markers and
-// Skip-Intro / Skip-Credits buttons.
+// Skip-Intro / Skip-Credits buttons. Returns ErrNotFound when the id names
+// no title, or one the viewer's cap leaves out (WithMaxAge).
 func (s *Store) ListSegments(ctx context.Context, itemID string) ([]Segment, error) {
 	if s == nil || s.Pool == nil {
 		return nil, ErrNoPool
+	}
+	if ok, err := s.visible(ctx, itemID); err != nil {
+		return nil, fmt.Errorf("item %s: %w", itemID, err)
+	} else if !ok {
+		return nil, ErrNotFound
 	}
 	rows, err := s.Pool.Query(ctx, `
 		SELECT id, kind, startms, endms,

@@ -51,6 +51,9 @@ func NewRouter(cfg config.Config, st *store.Store, verifier *auth.Verifier) (htt
 	// client. Backed by `cloud_katalog_ro` (SELECT-only role).
 	api := chi.NewRouter()
 	api.Use(verifier.Middleware)
+	// A viewer with a rating cap (the bearer's max_rating, or the parameter
+	// a BFF passes) is served only what the cap allows, on every route.
+	api.Use(capped)
 
 	// Cross-type browse + global search. `?q=` runs the FTS query
 	// against the items.search_vector tsvector column; the other

@@ -1,11 +1,44 @@
 package store
 
-import "context"
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/jackc/pgx/v5"
+)
 
 // A title's age rating is katalog-manager's (its migration 036): the
 // certification TMDB gives the title in a country, the minimum age it means
 // (min_age) and an admin's override (min_age_override). An episode carries no
-// certification of its own: it is rated as its series.
+// certification of its own: it is rated as its series. A kid's account is
+// capped at an age, and every read of a viewer's leaves out what is rated
+// above the cap, and what nothing rates unless the catalog's setting
+// ratings.unrated_for_capped says show.
+
+type ctxKey int
+
+const maxAgeKey ctxKey = 0
+
+// WithMaxAge is ctx for a viewer capped at age: every read of the store made
+// with it leaves out the titles rated above age, and those nothing rates
+// unless ratings.unrated_for_capped says show, as if the catalog did not hold
+// them (an item by id is ErrNotFound).
+func WithMaxAge(ctx context.Context, age int) context.Context {
+	return context.WithValue(ctx, maxAgeKey, age)
+}
+
+// maxAgeOf is the cap a read is made for; nil for an uncapped viewer.
+func maxAgeOf(ctx context.Context) *int {
+	if age, ok := ctx.Value(maxAgeKey).(int); ok {
+		return &age
+	}
+	return nil
+}
 
 // ratingColumns are the columns migration 036 adds to com_nalet_katalog_items
 // that a title's rating is read from.
@@ -19,6 +52,10 @@ const fromItems = `FROM com_nalet_katalog_items i LEFT JOIN com_nalet_katalog_it
 // its own override, else its parent's override, else its parent's rating,
 // else its own rating; NULL when nothing rates it.
 const ageSQL = `COALESCE(i.min_age_override, par.min_age_override, par.min_age, i.min_age)`
+
+// ownAgeSQL is ageSQL for an item without a parent, a film or a series:
+// katalog-manager's idx_items_rated_age indexes it.
+const ownAgeSQL = `COALESCE(i.min_age_override, i.min_age)`
 
 // ratingSelect is what every item query reads of the item's rating, after its
 // twelve columns (scanItem): the age (ageSQL), and the certification and its
@@ -41,4 +78,110 @@ func ratingSelect(rated bool) string {
 func (s *Store) rated(ctx context.Context) (bool, error) {
 	has, err := s.columns(ctx, "com_nalet_katalog_items", ratingColumns...)
 	return all(has, ratingColumns...), err
+}
+
+var unratedCatalog sync.Once
+
+// capFilter is the condition that keeps what the viewer capped at the age of
+// ctx (WithMaxAge) may be served of the items i (fromItems), binding values
+// with add: an item rated at most the cap, or one nothing rates when
+// ratings.unrated_for_capped says show. "" for an uncapped viewer. top says
+// the query lists titles without a parent alone (films, series): it then
+// reads their own rating, which katalog-manager's index serves, and a title
+// that has a parent after all is not served to a capped viewer. On a catalog
+// that rates nothing (no migration 036, or a role that may not read its
+// columns) a capped viewer is served nothing, and the service says so once.
+func (s *Store) capFilter(ctx context.Context, top bool, add func(any) string) (string, error) {
+	maxAge := maxAgeOf(ctx)
+	if maxAge == nil {
+		return "", nil
+	}
+	rated, err := s.rated(ctx)
+	if err != nil {
+		return "", err
+	}
+	if !rated {
+		unratedCatalog.Do(func() {
+			slog.Warn("the catalog rates no title (katalog-manager's migration 036, or SELECT on its columns, is " +
+				"missing): a viewer with a rating cap is served nothing until it does")
+		})
+		return "FALSE", nil
+	}
+	age := ageSQL
+	if top {
+		age = ownAgeSQL
+	}
+	cond := age + " <= " + add(*maxAge) + "::int"
+	if s.showUnrated(ctx) {
+		cond = "(" + cond + " OR " + age + " IS NULL)"
+	}
+	if top {
+		cond = "i.parent_id IS NULL AND " + cond
+	}
+	return cond, nil
+}
+
+// unratedSetting is the catalog's setting that says whether a viewer with a
+// rating cap is served the titles nothing rates (show), or not (hide, the
+// default).
+const unratedSetting = "ratings.unrated_for_capped"
+
+// unratedEvery is how long the setting is kept before it is read again.
+const unratedEvery = 30 * time.Second
+
+// unratedPolicy is the setting as last read.
+type unratedPolicy struct {
+	mu    sync.Mutex
+	show  bool
+	until time.Time
+	said  bool // that it cannot be read
+}
+
+// showUnrated reads ratings.unrated_for_capped from the catalog's settings, at
+// most every unratedEvery: true when it says show, whatever its case and
+// spaces. Unset, anything else, or unreadable (a role that may not read the
+// settings), it hides, and an unreadable one is said once.
+func (s *Store) showUnrated(ctx context.Context) bool {
+	s.unrated.mu.Lock()
+	defer s.unrated.mu.Unlock()
+	if time.Now().Before(s.unrated.until) {
+		return s.unrated.show
+	}
+	var value string
+	err := s.Pool.QueryRow(ctx, `SELECT valuetext FROM com_nalet_katalog_settings WHERE key = $1
+		ORDER BY id LIMIT 1`, unratedSetting).Scan(&value)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		if ctx.Err() != nil {
+			return false // the request went away: hide now, and read it again next time
+		}
+		if !s.unrated.said {
+			s.unrated.said = true
+			slog.Warn("the setting "+unratedSetting+" cannot be read: unrated titles are hidden from capped viewers", "err", err)
+		}
+		value = ""
+	}
+	s.unrated.show = strings.EqualFold(strings.TrimSpace(value), "show")
+	s.unrated.until = time.Now().Add(unratedEvery)
+	return s.unrated.show
+}
+
+// visible reports whether the item id is there for the viewer of ctx: the
+// catalog holds it, and the viewer's cap, if any, allows it.
+func (s *Store) visible(ctx context.Context, id string) (bool, error) {
+	args := []any{id}
+	add := func(v any) string {
+		args = append(args, v)
+		return fmt.Sprintf("$%d", len(args))
+	}
+	cond, err := s.capFilter(ctx, false, add)
+	if err != nil {
+		return false, err
+	}
+	q := `SELECT EXISTS (SELECT 1 ` + fromItems + ` WHERE i.id = $1`
+	if cond != "" {
+		q += ` AND ` + cond
+	}
+	var ok bool
+	err = s.Pool.QueryRow(ctx, q+`)`, args...).Scan(&ok)
+	return ok, err
 }

@@ -13,12 +13,20 @@ import (
 // intentionally configured to connect with the `cloud_katalog_ro` Postgres
 // role (set in the connection string) so the read path can never accidentally
 // mutate rows owned by katalog-manager-api.
+//
+// A read whose context carries a viewer's rating cap (WithMaxAge) leaves out
+// every title the cap does not allow, as if the catalog did not hold it
+// (ratings.go).
 type Store struct {
 	Pool *pgxpool.Pool
 
 	// schema is what the store has learnt of the catalog's columns: which of
 	// the ones a migration adds it may read yet (schema.go).
 	schema catalogColumns
+
+	// unrated is the catalog's setting that says whether a capped viewer is
+	// served unrated titles, as last read (ratings.go).
+	unrated unratedPolicy
 }
 
 // ErrNotFound is returned when an item or asset does not exist.

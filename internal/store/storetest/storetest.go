@@ -192,8 +192,8 @@ func firstLine(s string) string {
 	return s
 }
 
-// baseSchema is the part of the CAP base schema this service's people and
-// similarity queries read.
+// baseSchema is the part of the CAP base schema this service's people,
+// similarity, segment and rating queries read.
 const baseSchema = `
 CREATE TABLE com_nalet_katalog_items (
   id VARCHAR(36) NOT NULL PRIMARY KEY,
@@ -216,6 +216,18 @@ CREATE TABLE com_nalet_katalog_people (
 CREATE TABLE com_nalet_katalog_itempeople (
   id VARCHAR(36) NOT NULL PRIMARY KEY, item_id VARCHAR(36) NOT NULL,
   person_id VARCHAR(36) NOT NULL, role VARCHAR(40) NOT NULL
+);
+CREATE TABLE com_nalet_katalog_mediasegments (
+  id VARCHAR(36) NOT NULL PRIMARY KEY,
+  createdat TIMESTAMP, createdby VARCHAR(255), modifiedat TIMESTAMP, modifiedby VARCHAR(255),
+  item_id VARCHAR(36) NOT NULL, kind VARCHAR(20) NOT NULL, startms BIGINT NOT NULL, endms BIGINT NOT NULL,
+  source VARCHAR(30) NOT NULL, confidence DECIMAL(3, 2), label VARCHAR(120)
+);
+CREATE TABLE com_nalet_katalog_settings (
+  id VARCHAR(36) NOT NULL PRIMARY KEY,
+  createdat TIMESTAMP, createdby VARCHAR(255), modifiedat TIMESTAMP, modifiedby VARCHAR(255),
+  key VARCHAR(120) NOT NULL, valuetext VARCHAR(2000) NOT NULL DEFAULT '',
+  valuetype VARCHAR(20) NOT NULL DEFAULT 'string', description TEXT
 );
 `
 

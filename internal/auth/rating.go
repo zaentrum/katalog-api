@@ -32,6 +32,12 @@ func MaxRating(ctx context.Context) (age int, capped bool) {
 	return v, ok
 }
 
+// WithMaxRating is ctx for a viewer capped at age, as the middleware puts a
+// verified bearer's max_rating on its request.
+func WithMaxRating(ctx context.Context, age int) context.Context {
+	return context.WithValue(ctx, maxRatingKey, age)
+}
+
 // withMaxRating puts the cap a token's claims carry on ctx: the claim's age,
 // 0 for a claim that is no whole number of years, nothing without the claim.
 func withMaxRating(ctx context.Context, raw json.RawMessage, present bool) context.Context {
@@ -46,7 +52,7 @@ func withMaxRating(ctx context.Context, raw json.RawMessage, present bool) conte
 		})
 		age = 0
 	}
-	return context.WithValue(ctx, maxRatingKey, age)
+	return WithMaxRating(ctx, age)
 }
 
 // WholeYears reads a JSON value as a whole number of years: a number without
