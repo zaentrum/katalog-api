@@ -185,3 +185,44 @@ func (s *Store) visible(ctx context.Context, id string) (bool, error) {
 	err = s.Pool.QueryRow(ctx, q+`)`, args...).Scan(&ok)
 	return ok, err
 }
+
+// Visible is which of ids name a title the viewer of ctx may be served: in
+// the order given, each once, the ids of no title left out as the ones the
+// viewer's cap leaves out are.
+func (s *Store) Visible(ctx context.Context, ids []string) ([]string, error) {
+	if s == nil || s.Pool == nil {
+		return nil, ErrNoPool
+	}
+	args := []any{ids}
+	cond, err := s.capFilter(ctx, false, func(v any) string {
+		args = append(args, v)
+		return fmt.Sprintf("$%d", len(args))
+	})
+	if err != nil {
+		return nil, err
+	}
+	q := `SELECT i.id ` + fromItems + ` WHERE i.id = ANY($1::text[])`
+	if cond != "" {
+		q += ` AND ` + cond
+	}
+	rows, err := s.Pool.Query(ctx, q, args...)
+	if err != nil {
+		return nil, fmt.Errorf("visible items: %w", err)
+	}
+	found, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		return nil, fmt.Errorf("visible items: %w", err)
+	}
+	there := make(map[string]bool, len(found))
+	for _, id := range found {
+		there[id] = true
+	}
+	out := make([]string, 0, len(found))
+	for _, id := range ids {
+		if there[id] {
+			out = append(out, id)
+			delete(there, id)
+		}
+	}
+	return out, nil
+}

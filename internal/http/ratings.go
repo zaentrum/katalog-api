@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"regexp"
 	"strconv"
+	"strings"
 
 	"github.com/zaentrum/katalog-api/internal/auth"
 	"github.com/zaentrum/katalog-api/internal/store"
@@ -45,4 +46,49 @@ func capped(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// maxVisibleIDs is how many titles one /visible request may ask about.
+const maxVisibleIDs = 500
+
+// Visible answers which of the titles a viewer capped at an age may be
+// served, for a request a stream token authorizes, which carries the cap but
+// no bearer: chino-api asks it before it proxies a capped viewer's playback,
+// artwork and subtitle requests, and to filter the lists it holds itself.
+// ?ids= (comma-separated, at most maxVisibleIDs) are the titles, ?max_rating=
+// the cap, required: without it the answer is 400, and one that is no whole
+// number of years is the strictest cap, 0. The answer is {"ids": [...]}: the
+// ids asked about, in their order, that name a title the cap allows; an id of
+// no title is left out as one the cap leaves out. Like the asset routes it
+// takes no bearer: the Service is in-cluster only.
+func (h *ItemsHandler) Visible(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	if _, ok := q[maxRatingParam]; !ok {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "max_rating is required"})
+		return
+	}
+	var ids []string
+	seen := map[string]bool{}
+	for _, raw := range q["ids"] {
+		for _, id := range strings.Split(raw, ",") {
+			if id = strings.TrimSpace(id); id != "" && !seen[id] {
+				seen[id] = true
+				ids = append(ids, id)
+			}
+		}
+	}
+	if len(ids) > maxVisibleIDs {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "at most 500 ids at a time"})
+		return
+	}
+	age, _ := viewerCap(r)
+	if len(ids) == 0 {
+		writeJSON(w, http.StatusOK, map[string]any{"ids": []string{}})
+		return
+	}
+	visible, err := h.Store.Visible(store.WithMaxAge(r.Context(), age), ids)
+	if writeStoreErr(w, r, "visible items", err) {
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ids": visible})
 }

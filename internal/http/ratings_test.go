@@ -1,6 +1,7 @@
 package http
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -10,6 +11,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/zaentrum/katalog-api/internal/auth"
+	"github.com/zaentrum/katalog-api/internal/config"
 	"github.com/zaentrum/katalog-api/internal/store"
 	"github.com/zaentrum/katalog-api/internal/store/storetest"
 )
@@ -171,4 +173,60 @@ func TestEveryRouteServesTheCap(t *testing.T) {
 			t.Errorf("%s capped at %q: %d %s, want %s", tc.path, tc.claim, code, body, tc.want)
 		}
 	}
+}
+
+// /api/v1/visible answers which of ?ids= a viewer capped at ?max_rating= may
+// be served, in their order; it takes no bearer, as the asset routes take
+// none, while the catalog's routes stay behind it. Without max_rating it is
+// 400; one that is no whole number of years is the strictest cap.
+func TestVisibleRoute(t *testing.T) {
+	db := storetest.Open(t)
+	db.Migrate036(t)
+	db.Exec(t, `INSERT INTO com_nalet_katalog_items (id, type, title, min_age) VALUES
+		('m6', 'movie', 'Six', 6), ('m16', 'movie', 'Sixteen', 16), ('m0', 'movie', 'Zero', 0), ('mu', 'movie', 'Unrated', NULL)`)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	verifier, err := auth.NewVerifier(ctx, "http://127.0.0.1:1/realms/none", "chino")
+	if err != nil {
+		t.Fatal(err)
+	}
+	h, err := NewRouter(config.Config{}, &store.Store{Pool: db.Pool}, verifier)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		query string
+		code  int
+		body  string
+	}{
+		{"?ids=m16,m6,nothing,m0,m6&max_rating=12", 200, `{"ids":["m6","m0"]}`},
+		{"?ids=m16&ids=mu,m6&max_rating=16", 200, `{"ids":["m16","m6"]}`},
+		{"?ids=m16,m6,m0&max_rating=twelve", 200, `{"ids":["m0"]}`},
+		{"?max_rating=12", 200, `{"ids":[]}`},
+		{"?ids=m6", 400, `{"error":"max_rating is required"}`},
+		{"?ids=" + manyIDs(501) + "&max_rating=12", 400, `{"error":"at most 500 ids at a time"}`},
+		{"?ids=" + manyIDs(500) + ",m0&max_rating=12", 400, `{"error":"at most 500 ids at a time"}`},
+		{"?ids=" + manyIDs(499) + ",m0&max_rating=12", 200, `{"ids":["m0"]}`},
+	} {
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/v1/visible"+tc.query, nil))
+		if w.Code != tc.code || strings.TrimSpace(w.Body.String()) != tc.body {
+			t.Errorf("/api/v1/visible%s: %d %s, want %d %s", tc.query, w.Code, w.Body, tc.code, tc.body)
+		}
+	}
+	// The catalog's routes still take a bearer, and fail closed without the issuer.
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/v1/movies?max_rating=12", nil))
+	if w.Code != http.StatusServiceUnavailable {
+		t.Errorf("/api/v1/movies without a verifier: %d, want 503", w.Code)
+	}
+}
+
+// manyIDs is n ids of no title, comma-separated.
+func manyIDs(n int) string {
+	ids := make([]string, n)
+	for i := range ids {
+		ids[i] = "x" + strconv.Itoa(i)
+	}
+	return strings.Join(ids, ",")
 }

@@ -383,3 +383,30 @@ func TestTheUnratedSettingIsReadAtMostEveryHalfMinute(t *testing.T) {
 		t.Error("a role that may not read the settings shows unrated titles")
 	}
 }
+
+// Visible says which of the ids asked about a capped viewer may be served,
+// in their order, each once; an id of no title is left out with the titles
+// the cap leaves out.
+func TestVisible(t *testing.T) {
+	st, db := ratedCatalog(t)
+	setUnrated(t, st, db, "")
+	ids := []string{"e2", "m12", "no-such-id", "mu", "m12", "e4", "m0", "s16", "e1"}
+	for maxAge, want := range map[int]string{
+		0:  "m0",
+		12: "m12 e4 m0 e1",
+		16: "m12 e4 m0 s16 e1",
+		18: "e2 m12 e4 m0 s16 e1",
+	} {
+		got, err := st.Visible(WithMaxAge(context.Background(), maxAge), ids)
+		if err != nil || strings.Join(got, " ") != want {
+			t.Errorf("capped at %d: %q %v, want %q", maxAge, got, err, want)
+		}
+	}
+	setUnrated(t, st, db, "show")
+	if got, _ := st.Visible(WithMaxAge(context.Background(), 0), ids); strings.Join(got, " ") != "mu m0" {
+		t.Errorf("capped at 0, unrated shown: %q", got)
+	}
+	if got, _ := st.Visible(context.Background(), ids); strings.Join(got, " ") != "e2 m12 mu e4 m0 s16 e1" {
+		t.Errorf("uncapped: %q, want every id of a title", got)
+	}
+}

@@ -42,6 +42,10 @@ func NewRouter(cfg config.Config, st *store.Store, verifier *auth.Verifier) (htt
 	// an on-disk path so they can serve the .vtt straight off the packages
 	// PVC instead of round-tripping the bytes through katalog-api.
 	r.Get("/api/v1/subtitles/{id}/asset", items.SubtitleAsset)
+	// Same trust model for the titles a viewer capped at an age may be
+	// served (?ids=&max_rating=): chino-api asks it for a capped viewer's
+	// requests that a stream token authorizes, which carry no bearer.
+	r.Get("/api/v1/visible", items.Visible)
 
 	// Browse + detail surface for the product BFFs (chino-api, tv-api,
 	// musig-api). OIDC-gated; each BFF relays the end-user's bearer
