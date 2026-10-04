@@ -8,10 +8,10 @@
 // Each test gets a schema of its own, dropped when the test ends. It holds the
 // catalog tables this service reads as a catalog older than migration 030 has
 // them, column for column as katalog-manager creates them (lowercase, as
-// Postgres folded the CAP DDL). Migrate030 and Migrate032 bring the schema
-// forward, so a test can prove a query works on a catalog before and after a
-// migration — the catalog is katalog-manager's, and it migrates while this
-// service runs.
+// Postgres folded the CAP DDL). Migrate030, Migrate032 and Migrate036 bring
+// the schema forward, so a test can prove a query works on a catalog before
+// and after a migration — the catalog is katalog-manager's, and it migrates
+// while this service runs.
 package storetest
 
 import (
@@ -85,6 +85,14 @@ func (db *DB) Migrate030(t testing.TB) {
 func (db *DB) Migrate032(t testing.TB) {
 	t.Helper()
 	db.Exec(t, migration032)
+}
+
+// Migrate036 adds what migration 036 adds to a title: its certification and
+// its country, the minimum age it means, an admin's override, when TMDB was
+// read, and the index of the age a title without a parent is held to.
+func (db *DB) Migrate036(t testing.TB) {
+	t.Helper()
+	db.Exec(t, migration036)
 }
 
 // Exec runs one statement (or several, without arguments) in the schema and
@@ -254,4 +262,19 @@ ALTER TABLE com_nalet_katalog_itempeople
   ADD CONSTRAINT itempeople_role_token CHECK (role ~ '^[a-z][a-z0-9-]{0,39}$');
 CREATE UNIQUE INDEX IF NOT EXISTS idx_itempeople_credit
   ON com_nalet_katalog_itempeople (item_id, person_id, role);
+`
+
+// migration036 is what katalog-manager's 036_item_ratings.sql adds: a title's
+// certification as TMDB gives it, its country, the minimum age it means (0 to
+// 21), an admin's override, when TMDB was read, and the index of the age a
+// title without a parent is held to. An episode carries none of its own.
+const migration036 = `
+ALTER TABLE com_nalet_katalog_items
+  ADD COLUMN IF NOT EXISTS certification            VARCHAR(40),
+  ADD COLUMN IF NOT EXISTS certification_country    VARCHAR(2) CHECK (certification_country ~ '^[A-Z]{2}$'),
+  ADD COLUMN IF NOT EXISTS min_age                  SMALLINT CHECK (min_age BETWEEN 0 AND 21),
+  ADD COLUMN IF NOT EXISTS min_age_override         SMALLINT CHECK (min_age_override BETWEEN 0 AND 21),
+  ADD COLUMN IF NOT EXISTS certification_fetched_at TIMESTAMPTZ;
+CREATE INDEX IF NOT EXISTS idx_items_rated_age
+  ON com_nalet_katalog_items ((COALESCE(min_age_override, min_age)));
 `

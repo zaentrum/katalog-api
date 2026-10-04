@@ -21,6 +21,17 @@ type Item struct {
 	EpisodeNumber *int    `json:"episode_number,omitempty"`
 	ParentID      string  `json:"parent_id,omitempty"`
 
+	// MinAge is the age a viewer must be to be served the item: an admin's
+	// rating of it, else (an episode) its series' rating, else the minimum
+	// age its certification means; nil when nothing rates it. A pointer, so
+	// 0 is sent. Certification and CertificationCountry are the
+	// certification TMDB gives the title that the age comes from ("12" in
+	// "DE", "PG-13" in "US", ISO 3166-1 alpha-2), an episode's its series';
+	// empty when an admin rated it, or nothing did.
+	MinAge               *int   `json:"min_age,omitempty"`
+	Certification        string `json:"certification,omitempty"`
+	CertificationCountry string `json:"certification_country,omitempty"`
+
 	// Optional rich associations populated by GetItemWithIncludes when
 	// the caller asks for them via `?include=`. Always nil/empty on
 	// list endpoints — those return only the core item fields.

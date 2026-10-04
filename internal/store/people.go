@@ -197,10 +197,12 @@ func (s *Store) GetPerson(ctx context.Context, id string, limit int, langs []str
 
 	// One card per title, however many roles the person holds on it (a
 	// person credited as actor and director is one card with both roles).
+	rated, err := s.rated(ctx)
+	if err != nil {
+		return nil, err
+	}
 	rows, err := s.Pool.Query(ctx, `
-		SELECT i.id, i.type, i.title, i.sorttitle, i.year,
-			i.rating, i.description, i.tagline, i.durationms,
-			i.seasonnumber, i.episodenumber, i.parent_id, c.roles
+		SELECT `+itemColumns+ratingSelect(rated)+`, c.roles
 		FROM (
 			SELECT ip.item_id, array_agg(ip.role ORDER BY `+roleRank("$3", "ip.role")+`, ip.role) AS roles
 			FROM (SELECT DISTINCT item_id, role::text AS role
@@ -208,6 +210,7 @@ func (s *Store) GetPerson(ctx context.Context, id string, limit int, langs []str
 			GROUP BY ip.item_id
 		) c
 		JOIN com_nalet_katalog_items i ON i.id = c.item_id
+		LEFT JOIN com_nalet_katalog_items par ON par.id = i.parent_id
 		ORDER BY i.year DESC NULLS LAST, i.rating DESC NULLS LAST, i.sorttitle ASC NULLS LAST, i.id
 		LIMIT $2`, id, limit, creditRoles)
 	if err != nil {
