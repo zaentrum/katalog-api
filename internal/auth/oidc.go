@@ -179,7 +179,14 @@ func (v *Verifier) Middleware(next http.Handler) http.Handler {
 			http.Error(w, "audience not permitted", http.StatusForbidden)
 			return
 		}
-		next.ServeHTTP(w, r)
+		// The viewer's rating cap rides on the request (MaxRating).
+		var all map[string]json.RawMessage
+		if err := tok.Claims(&all); err != nil {
+			http.Error(w, "claims unreadable", http.StatusUnauthorized)
+			return
+		}
+		claim, capped := all[MaxRatingClaim]
+		next.ServeHTTP(w, r.WithContext(withMaxRating(r.Context(), claim, capped)))
 	})
 }
 
