@@ -27,7 +27,7 @@ func extrasOf(ctx context.Context, t *testing.T, st *Store, item string) (string
 // its own.
 func TestAnItemListsTheExtrasThatPlay(t *testing.T) {
 	st, db := open(t)
-	db.Migrate038(t)
+	db.Migrate039(t)
 	addItem(t, db, "m1", "movie", "A Film", 2001, 7)
 	addItem(t, db, "m2", "movie", "Another Film", 2002, 7)
 	addItem(t, db, "m3", "movie", "A Film Without Extras", 2003, 7)
@@ -64,7 +64,7 @@ func TestAnItemListsTheExtrasThatPlay(t *testing.T) {
 // label is none.
 func TestExtrasAreListedInOrderUnderTheirLabels(t *testing.T) {
 	st, db := open(t)
-	db.Migrate038(t)
+	db.Migrate039(t)
 	addItem(t, db, "m1", "movie", "A Film", 2001, 7)
 	// Entered in no particular order. The ids sort against the order listed,
 	// but for a and b, taken in at the same time, which only their ids order:
@@ -90,7 +90,7 @@ func TestExtrasAreListedInOrderUnderTheirLabels(t *testing.T) {
 // says.
 func TestAnExtraSaysWhatItIs(t *testing.T) {
 	st, db := open(t)
-	db.Migrate038(t)
+	db.Migrate039(t)
 	addItem(t, db, "s1", "series", "A Show", 2010, 8)
 	addItem(t, db, "m1", "movie", "A Film", 2001, 7)
 	db.Exec(t, `INSERT INTO com_nalet_katalog_itemextras
@@ -127,11 +127,11 @@ func TestAnExtraSaysWhatItIs(t *testing.T) {
 	}
 }
 
-// On a catalog without migration 038 an item has no extras: it is served with
+// On a catalog without migration 039 an item has no extras: it is served with
 // what else was asked for rather than failing. The table is looked for again
 // on the next request, so its extras are listed as soon as the migration has
 // run, without a restart.
-func TestExtrasOnACatalogOlderThan038(t *testing.T) {
+func TestExtrasOnACatalogOlderThan039(t *testing.T) {
 	st, db := open(t)
 	addItem(t, db, "m1", "movie", "A Film", 2001, 7)
 	db.Exec(t, `INSERT INTO com_nalet_katalog_genres (id, name) VALUES ('g1', 'Drama')`)
@@ -141,26 +141,26 @@ func TestExtrasOnACatalogOlderThan038(t *testing.T) {
 	for i := 1; i <= 2; i++ {
 		it, err := st.GetItemWithIncludes(ctx, "m1", inc)
 		if err != nil || it.Extras != nil || len(it.Genres) != 1 {
-			t.Fatalf("before 038, call %d: extras %+v, genres %q, %v; want no extras, the genre", i, it.Extras, it.Genres, err)
+			t.Fatalf("before 039, call %d: extras %+v, genres %q, %v; want no extras, the genre", i, it.Extras, it.Genres, err)
 		}
 	}
 
 	// The migration runs while the service is up; the next request reads it.
-	db.Migrate038(t)
+	db.Migrate039(t)
 	db.Exec(t, `INSERT INTO com_nalet_katalog_itemextras (id, item_id, kind, title, registeredby, state, packagedat)
 		VALUES ('x1', 'm1', 'trailer', 'Trailer', 'api', 'ready', now())`)
 	if got, err := extrasOf(ctx, t, st, "m1"); err != nil || got != "x1:Trailer" {
-		t.Fatalf("after 038: %q %v, want x1:Trailer", got, err)
+		t.Fatalf("after 039: %q %v, want x1:Trailer", got, err)
 	}
 }
 
-// The read-only role was granted the catalog's tables before 038 created the
+// The read-only role was granted the catalog's tables before 039 created the
 // extras table: an item is served without extras rather than failing, also
 // while the role may read only some of the columns they are read from, and
 // with them once the role is granted the table.
 func TestExtrasWhenTheRoleMayNotReadThem(t *testing.T) {
 	_, db := open(t)
-	db.Migrate038(t)
+	db.Migrate039(t)
 	addItem(t, db, "m1", "movie", "A Film", 2001, 7)
 	db.Exec(t, `INSERT INTO com_nalet_katalog_itemextras (id, item_id, kind, title, registeredby, state, packagedat)
 		VALUES ('x1', 'm1', 'trailer', 'Trailer', 'api', 'ready', now())`)
@@ -187,7 +187,7 @@ func TestExtrasWhenTheRoleMayNotReadThem(t *testing.T) {
 // its extras, as for an id there is not.
 func TestACappedViewerGetsTheExtrasOfWhatTheCapAllows(t *testing.T) {
 	st, db := ratedCatalog(t)
-	db.Migrate038(t)
+	db.Migrate039(t)
 	titles := []string{"m0", "m12", "m16", "m17", "mu", "mo", "s12", "s16"}
 	for _, id := range titles {
 		db.Exec(t, `INSERT INTO com_nalet_katalog_itemextras (id, item_id, kind, title, registeredby, state, packagedat)

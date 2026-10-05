@@ -93,7 +93,7 @@ func cappedCatalog(t *testing.T) func(claim, path string) (int, string) {
 	db.Migrate030(t)
 	db.Migrate032(t)
 	db.Migrate036(t)
-	db.Migrate038(t)
+	db.Migrate039(t)
 	db.Exec(t, `INSERT INTO com_nalet_katalog_items (id, type, title, sorttitle, parent_id, min_age, certification, certification_country) VALUES
 		('m6', 'movie', 'Six', 'Six', NULL, 6, '6', 'DE'), ('m16', 'movie', 'Sixteen', 'Sixteen', NULL, 16, '16', 'DE'),
 		('mu', 'movie', 'Unrated', 'Unrated', NULL, NULL, NULL, NULL),

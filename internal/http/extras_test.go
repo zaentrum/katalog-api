@@ -18,7 +18,7 @@ import (
 // either.
 func TestExtrasOnTheWire(t *testing.T) {
 	db := storetest.Open(t)
-	db.Migrate038(t)
+	db.Migrate039(t)
 	db.Exec(t, `INSERT INTO com_nalet_katalog_items (id, type, title) VALUES
 		('m1', 'movie', 'A Film'), ('s1', 'series', 'A Show'), ('m2', 'movie', 'Nothing That Plays')`)
 	db.Exec(t, `INSERT INTO com_nalet_katalog_itemextras (id, item_id, kind, title, label, language, durationms,
@@ -62,7 +62,7 @@ func TestExtrasOnTheWire(t *testing.T) {
 	}
 }
 
-// A catalog without migration 038 answers an item asked for with its extras as
+// A catalog without migration 039 answers an item asked for with its extras as
 // one that has none: the item and what else was asked for, and no extras
 // field.
 func TestExtrasOnTheWireWithoutTheTable(t *testing.T) {
@@ -76,6 +76,6 @@ func TestExtrasOnTheWireWithoutTheTable(t *testing.T) {
 
 	body, _ := get(t, r, "/items/m1?include=genres,extras", http.Header{})
 	if _, ok := body["extras"]; ok || !reflect.DeepEqual(body["genres"], []any{"Drama"}) {
-		t.Errorf("without 038: %v, want the genre and no extras field", body)
+		t.Errorf("without 039: %v, want the genre and no extras field", body)
 	}
 }

@@ -43,7 +43,7 @@ surface is described in [`api/openapi.yaml`](api/openapi.yaml).
 `GET /api/v1/items/{id}?include=extras` lists a movie's or a series' extras
 that play: bonus material that is a file of its own (a trailer, a teaser, a
 featurette, a deleted scene, …), which katalog-manager packages for streaming
-apart from the title (its migration 038, `com_nalet_katalog_itemextras`).
+apart from the title (its migration 039, `com_nalet_katalog_itemextras`).
 
 - An extra plays once it is packaged, until it is removed, unless an admin hid
   it or its source went missing. While it is packaged anew, the package it had
@@ -66,8 +66,8 @@ apart from the title (its migration 038, `com_nalet_katalog_itemextras`).
 ]
 ```
 
-On a catalog without migration 038 an item has no extras. A read-only role
-granted the catalog's tables before 038 created the extras table may not read
+On a catalog without migration 039 an item has no extras. A read-only role
+granted the catalog's tables before 039 created the extras table may not read
 it until someone grants it (`GRANT SELECT ON com_nalet_katalog_itemextras TO
 <role>`); until then an item has no extras either, rather than failing.
 
@@ -138,7 +138,7 @@ go test ./...
 The store and handler tests that need PostgreSQL are skipped unless
 `KATALOG_API_TEST_DATABASE_URL` names a database in which they may create
 and drop schemas and roles (each test makes its own schema, with the catalog
-tables before and after the migrations it reads: 030, 032, 036 and 038). A
+tables before and after the migrations it reads: 030, 032, 036 and 039). A
 throwaway server:
 
 ```bash

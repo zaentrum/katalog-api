@@ -722,7 +722,7 @@ func (s *Store) listTrailersFor(ctx context.Context, itemID string) ([]Trailer, 
 }
 
 // extraColumns are the columns of com_nalet_katalog_itemextras, the table
-// katalog-manager's migration 038 creates, that an item's extras are read
+// katalog-manager's migration 039 creates, that an item's extras are read
 // from: every column listExtrasFor names.
 var extraColumns = []string{
 	"id", "item_id", "kind", "title", "label", "language", "seasonnumber", "durationms",
@@ -738,7 +738,7 @@ var extraColumns = []string{
 // by its title. A series' extra that belongs to a season names it; an extra of
 // any other type of item names none.
 //
-// On a catalog without migration 038, or with a role that may not read the
+// On a catalog without migration 039, or with a role that may not read the
 // table yet (one created after the read-only role was granted its tables), the
 // item has no extras rather than failing; they are read as soon as the table
 // is there and the role may read it, without a restart.

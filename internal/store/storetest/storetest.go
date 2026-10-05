@@ -9,7 +9,7 @@
 // catalog tables this service reads as a catalog older than migration 030 has
 // them, column for column as katalog-manager creates them (lowercase, as
 // Postgres folded the CAP DDL). Migrate030, Migrate032, Migrate036 and
-// Migrate038 bring the schema forward, so a test can prove a query works on a
+// Migrate039 bring the schema forward, so a test can prove a query works on a
 // catalog before and after a migration — the catalog is katalog-manager's, and
 // it migrates while this service runs.
 package storetest
@@ -95,11 +95,11 @@ func (db *DB) Migrate036(t testing.TB) {
 	db.Exec(t, migration036)
 }
 
-// Migrate038 adds what migration 038 adds: a movie's or a series' extras, one
+// Migrate039 adds what migration 039 adds: a movie's or a series' extras, one
 // row per extra, with what a viewer is shown of it and its package.
-func (db *DB) Migrate038(t testing.TB) {
+func (db *DB) Migrate039(t testing.TB) {
 	t.Helper()
-	db.Exec(t, migration038)
+	db.Exec(t, migration039)
 }
 
 // Exec runs one statement (or several, without arguments) in the schema and
@@ -298,13 +298,13 @@ CREATE INDEX IF NOT EXISTS idx_items_rated_age
   ON com_nalet_katalog_items ((COALESCE(min_age_override, min_age)));
 `
 
-// migration038 is katalog-manager's 038_item_extras.sql, as the catalog
+// migration039 is katalog-manager's 039_item_extras.sql, as the catalog
 // contract defines it: one row per extra of a movie or a series (never an
 // episode), keyed by the extra's id, with how it was taken in, what a viewer
 // is shown of it (its order, whether it is hidden, a label), where its
 // packaging stands, its package, and when it was removed. An extra plays when
 // it is packaged, not removed, not hidden and its source is not missing.
-const migration038 = `
+const migration039 = `
 CREATE TABLE IF NOT EXISTS com_nalet_katalog_itemextras (
   id VARCHAR(36) PRIMARY KEY,
   item_id VARCHAR(36) NOT NULL,

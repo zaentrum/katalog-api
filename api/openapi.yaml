@@ -287,7 +287,7 @@ components:
             anew, the package it had plays on). In the order a viewer sees
             them: by the order an admin gave them (those without one last),
             then as they were taken in. Omitted when none plays, and on a
-            catalog that has no extras yet (katalog-manager's migration 038,
+            catalog that has no extras yet (katalog-manager's migration 039,
             or SELECT on its table, missing). The item's links to online
             videos are apart from these (include=trailers). A viewer whose
             rating cap leaves the item out gets neither the item nor its
