@@ -282,11 +282,11 @@ components:
           description: >
             With include=extras, on a movie or a series. Its extras that play:
             bonus material that is a file of its own, packaged for streaming
-            (an extra plays once it is packaged, until it is removed, unless an
-            admin hid it or its source went missing; while it is packaged
+            (an extra plays once it is packaged, until it is removed, unless it
+            is hidden: the scanner hides one whose file went missing; while it is packaged
             anew, the package it had plays on). In the order a viewer sees
-            them: by the order an admin gave them (those without one last),
-            then as they were taken in. Omitted when none plays, and on a
+            them: by the place they are given (those without one last; nothing
+            sets one yet), then as they were taken in. Omitted when none plays, and on a
             catalog that has no extras yet (katalog-manager's migration 039,
             or SELECT on its table, missing). The item's links to online
             videos are apart from these (include=trailers). A viewer whose
@@ -351,12 +351,12 @@ components:
         title:
           type: string
           description: >
-            What a viewer sees: the label an admin gave the extra, else the
-            title it was taken in with.
+            What a viewer sees: its label when one is set (nothing sets one
+            yet), else the title it was taken in with.
           example: Trailer
         language:
           type: string
-          description: The language spoken in it, a BCP 47 tag.
+          description: The language spoken in it, as taken in — BCP 47 or ISO 639-2 (en, eng; zxx, none).
           example: en
         duration_ms:
           type: integer

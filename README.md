@@ -45,13 +45,15 @@ that play: bonus material that is a file of its own (a trailer, a teaser, a
 featurette, a deleted scene, …), which katalog-manager packages for streaming
 apart from the title (its migration 039, `com_nalet_katalog_itemextras`).
 
-- An extra plays once it is packaged, until it is removed, unless an admin hid
-  it or its source went missing. While it is packaged anew, the package it had
+- An extra plays once it is packaged, until it is removed, unless it is
+  hidden (the scanner hides one whose file went missing). While it is packaged anew, the package it had
   plays on.
-- They come in the order a viewer sees them: by the order an admin gave them
-  (those without one last), then as they were taken in, then by id.
-- Each is `id`, `kind` and `title` (the label an admin gave it, else the title
-  it was taken in with) and, when known, `language` (BCP 47) and
+- They come in the order a viewer sees them: by the place they are given
+  (those without one last; nothing sets one yet), then as they were taken in,
+  then by id.
+- Each is `id`, `kind` and `title` (its label when one is set, which nothing
+  does yet, else the title it was taken in with) and, when known, `language`
+  (as taken in: BCP 47 or ISO 639-2, `en`, `eng`; `zxx` none) and
   `duration_ms`. A series' extra that belongs to a season names it in
   `season_number` (0 is the specials).
 - `trailers` (`include=trailers`) stays the item's links to online videos;
