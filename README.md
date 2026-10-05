@@ -38,6 +38,39 @@ surface is described in [`api/openapi.yaml`](api/openapi.yaml).
 - The portrait itself is served by katalog-manager at
   `/api/artwork/person/{id}/profile`; `has_profile` says whether there is one.
 
+## Extras
+
+`GET /api/v1/items/{id}?include=extras` lists a movie's or a series' extras
+that play: bonus material that is a file of its own (a trailer, a teaser, a
+featurette, a deleted scene, …), which katalog-manager packages for streaming
+apart from the title (its migration 038, `com_nalet_katalog_itemextras`).
+
+- An extra plays once it is packaged, until it is removed, unless an admin hid
+  it or its source went missing. While it is packaged anew, the package it had
+  plays on.
+- They come in the order a viewer sees them: by the order an admin gave them
+  (those without one last), then as they were taken in, then by id.
+- Each is `id`, `kind` and `title` (the label an admin gave it, else the title
+  it was taken in with) and, when known, `language` (BCP 47) and
+  `duration_ms`. A series' extra that belongs to a season names it in
+  `season_number` (0 is the specials).
+- `trailers` (`include=trailers`) stays the item's links to online videos;
+  extras are apart from them.
+- An item's extras come with the item: a viewer whose rating cap leaves the
+  item out gets the 404 of an id there is not.
+
+```json
+"extras": [
+  {"id": "1b5c2a8e-6f0d-4c3e-9a51-2d7f0c4b8e01", "kind": "trailer", "title": "Trailer", "language": "en", "duration_ms": 33000},
+  {"id": "1b5c2a8e-6f0d-4c3e-9a51-2d7f0c4b8e04", "kind": "featurette", "title": "Specials", "duration_ms": 61000, "season_number": 0}
+]
+```
+
+On a catalog without migration 038 an item has no extras. A read-only role
+granted the catalog's tables before 038 created the extras table may not read
+it until someone grants it (`GRANT SELECT ON com_nalet_katalog_itemextras TO
+<role>`); until then an item has no extras either, rather than failing.
+
 ## Ratings and capped viewers
 
 A kid's account is capped at an age. Every route behind the bearer serves a
@@ -105,7 +138,7 @@ go test ./...
 The store and handler tests that need PostgreSQL are skipped unless
 `KATALOG_API_TEST_DATABASE_URL` names a database in which they may create
 and drop schemas and roles (each test makes its own schema, with the catalog
-tables before and after the migrations it reads: 030, 032 and 036). A
+tables before and after the migrations it reads: 030, 032, 036 and 038). A
 throwaway server:
 
 ```bash
