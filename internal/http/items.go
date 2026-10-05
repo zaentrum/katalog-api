@@ -47,7 +47,7 @@ func (h *ItemsHandler) List(w http.ResponseWriter, r *http.Request) {
 }
 
 // Get returns a single item by id, optionally expanded via `?include=`
-// (genres, people, subtitles, trailers, segments). 404 when the id
+// (genres, people, subtitles, trailers, extras, segments). 404 when the id
 // doesn't exist in the items table.
 func (h *ItemsHandler) Get(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")

@@ -331,6 +331,7 @@ type IncludeOpts struct {
 	People    bool
 	Subtitles bool
 	Trailers  bool
+	Extras    bool
 	Segments  bool
 }
 
@@ -348,6 +349,8 @@ func ParseInclude(raw string) IncludeOpts {
 			out.Subtitles = true
 		case "trailers", "trailerlinks":
 			out.Trailers = true
+		case "extras":
+			out.Extras = true
 		case "segments":
 			out.Segments = true
 		}
@@ -388,7 +391,8 @@ func (s *Store) GetItem(ctx context.Context, id string) (Item, error) {
 // GetItemWithIncludes loads an item plus the requested associations in
 // one round-trip per association (cheap: each association is a single
 // query keyed by item_id). Returns ErrNotFound when the id doesn't
-// exist.
+// exist, or the viewer's cap leaves the item out: then none of its
+// associations, its extras among them, is served either.
 func (s *Store) GetItemWithIncludes(ctx context.Context, id string, inc IncludeOpts) (Item, error) {
 	it, err := s.GetItem(ctx, id)
 	if err != nil {
@@ -421,6 +425,13 @@ func (s *Store) GetItemWithIncludes(ctx context.Context, id string, inc IncludeO
 			return Item{}, err
 		}
 		it.Trailers = ts
+	}
+	if inc.Extras {
+		es, err := s.listExtrasFor(ctx, id, it.Type)
+		if err != nil {
+			return Item{}, err
+		}
+		it.Extras = es
 	}
 	if inc.Segments {
 		seg, err := s.segmentSummaryFor(ctx, id)
@@ -706,6 +717,63 @@ func (s *Store) listTrailersFor(ctx context.Context, itemID string) ([]Trailer, 
 			return nil, err
 		}
 		out = append(out, t)
+	}
+	return out, rows.Err()
+}
+
+// extraColumns are the columns of com_nalet_katalog_itemextras, the table
+// katalog-manager's migration 038 creates, that an item's extras are read
+// from: every column listExtrasFor names.
+var extraColumns = []string{
+	"id", "item_id", "kind", "title", "label", "language", "seasonnumber", "durationms",
+	"sortorder", "hidden", "state", "packagedat", "removedat", "createdat",
+}
+
+// listExtrasFor returns the extras of the item that play, in the order a
+// viewer sees them: by the order an admin gave them (those without one last),
+// then as they were taken in, then by id. An extra plays once it is packaged,
+// until it is removed, unless an admin hid it or its source went missing;
+// while it is packaged anew, the package it had plays on (the packager swaps
+// the new one in whole). An extra is titled by its label when it has one, else
+// by its title. A series' extra that belongs to a season names it; an extra of
+// any other type of item names none.
+//
+// On a catalog without migration 038, or with a role that may not read the
+// table yet (one created after the read-only role was granted its tables), the
+// item has no extras rather than failing; they are read as soon as the table
+// is there and the role may read it, without a restart.
+func (s *Store) listExtrasFor(ctx context.Context, itemID, itemType string) ([]Extra, error) {
+	has, err := s.columns(ctx, "com_nalet_katalog_itemextras", extraColumns...)
+	if err != nil {
+		return nil, err
+	}
+	if !all(has, extraColumns...) {
+		return nil, nil
+	}
+	rows, err := s.Pool.Query(ctx, `
+		SELECT id, kind, COALESCE(NULLIF(btrim(label), ''), title),
+		       COALESCE(language, ''), COALESCE(durationms, 0), seasonnumber
+		FROM com_nalet_katalog_itemextras
+		WHERE item_id = $1
+		  AND packagedat IS NOT NULL AND removedat IS NULL AND NOT hidden AND state <> 'missing'
+		ORDER BY sortorder NULLS LAST, createdat, id`, itemID)
+	if err != nil {
+		return nil, fmt.Errorf("extras of %s: %w", itemID, err)
+	}
+	defer rows.Close()
+	out := []Extra{}
+	for rows.Next() {
+		var (
+			e      Extra
+			season *int
+		)
+		if err := rows.Scan(&e.ID, &e.Kind, &e.Title, &e.Language, &e.DurationMs, &season); err != nil {
+			return nil, err
+		}
+		if itemType == "series" {
+			e.SeasonNumber = season
+		}
+		out = append(out, e)
 	}
 	return out, rows.Err()
 }

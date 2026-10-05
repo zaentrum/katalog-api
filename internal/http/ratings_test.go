@@ -93,6 +93,7 @@ func cappedCatalog(t *testing.T) func(claim, path string) (int, string) {
 	db.Migrate030(t)
 	db.Migrate032(t)
 	db.Migrate036(t)
+	db.Migrate038(t)
 	db.Exec(t, `INSERT INTO com_nalet_katalog_items (id, type, title, sorttitle, parent_id, min_age, certification, certification_country) VALUES
 		('m6', 'movie', 'Six', 'Six', NULL, 6, '6', 'DE'), ('m16', 'movie', 'Sixteen', 'Sixteen', NULL, 16, '16', 'DE'),
 		('mu', 'movie', 'Unrated', 'Unrated', NULL, NULL, NULL, NULL),
@@ -104,6 +105,9 @@ func cappedCatalog(t *testing.T) func(claim, path string) (int, string) {
 	db.Exec(t, `INSERT INTO com_nalet_katalog_itemgenres (id, item_id, genre_id) VALUES ('ig1', 'm6', 'g'), ('ig2', 'm16', 'g')`)
 	db.Exec(t, `INSERT INTO com_nalet_katalog_mediasegments (id, item_id, kind, startms, endms, source) VALUES
 		('sg', 'm16', 'intro', 0, 1, 'manual')`)
+	db.Exec(t, `INSERT INTO com_nalet_katalog_itemextras (id, item_id, kind, title, registeredby, state, packagedat) VALUES
+		('x6', 'm6', 'trailer', 'Trailer', 'api', 'ready', now()), ('x16', 'm16', 'teaser', 'Teaser', 'api', 'ready', now()),
+		('xs16', 's16', 'trailer', 'Trailer', 'api', 'ready', now())`)
 	h := &ItemsHandler{Store: &store.Store{Pool: db.Pool}}
 	r := chi.NewRouter()
 	r.Use(capped)
@@ -128,13 +132,15 @@ func cappedCatalog(t *testing.T) func(claim, path string) (int, string) {
 }
 
 // Every route of the catalog serves a capped viewer what the cap allows: the
-// lists and their totals, a person's filmography and search; and answers a
-// title it may not be served, by id, as a title there is not: the same 404,
-// for the item, its segments, more like it and a series' episodes.
+// lists and their totals, a person's filmography and search, a title's
+// extras with it; and answers a title it may not be served, by id, as a title
+// there is not: the same 404, for the item (with its extras or without), its
+// segments, more like it and a series' episodes.
 func TestEveryRouteServesTheCap(t *testing.T) {
 	serve := cappedCatalog(t)
 	notThere := func(path string) (int, string) { return serve("", strings.Replace(path, "{id}", "no-such-id", 1)) }
-	for _, path := range []string{"/items/{id}", "/items/{id}/segments", "/items/{id}/similar", "/series/{id}/episodes"} {
+	for _, path := range []string{"/items/{id}", "/items/{id}?include=extras", "/items/{id}/segments", "/items/{id}/similar",
+		"/series/{id}/episodes"} {
 		code, body := notThere(path)
 		if code != http.StatusNotFound {
 			t.Fatalf("%s of an id there is not: %d %q", path, code, body)
@@ -167,6 +173,9 @@ func TestEveryRouteServesTheCap(t *testing.T) {
 		{"16", "/items/m6/similar", `"items":[{"id":"m16"`},
 		{"16", "/series/s16/episodes", `"items":[{"id":"e1"`},
 		{"16", "/items/e1", `"min_age":16`},
+		{"12", "/items/m6?include=extras", `"extras":[{"id":"x6","kind":"trailer","title":"Trailer"}]`},
+		{"16", "/items/m16?include=extras", `"extras":[{"id":"x16","kind":"teaser","title":"Teaser"}]`},
+		{"16", "/items/s16?include=extras", `"extras":[{"id":"xs16","kind":"trailer","title":"Trailer"}]`},
 	} {
 		code, body := serve(tc.claim, tc.path)
 		if code != http.StatusOK || !strings.Contains(body, tc.want) {

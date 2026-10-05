@@ -81,8 +81,9 @@ func NewRouter(cfg config.Config, st *store.Store, verifier *auth.Verifier) (htt
 	api.Get("/people", items.People)
 	api.Get("/people/{id}", items.Person)
 
-	// Single-item detail. `?include=genres,people,subtitles,trailers,segments`
-	// folds the associations into one round-trip instead of N follow-ups.
+	// Single-item detail. `?include=` (genres, people, subtitles, trailers,
+	// extras, segments) folds the associations into one round-trip instead of
+	// N follow-ups.
 	api.Get("/items/{id}", items.Get)
 	// Series → episodes association. Returns an empty `items` list (not
 	// 404) when the series exists but has no episodes scanned yet.

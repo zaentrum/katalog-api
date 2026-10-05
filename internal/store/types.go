@@ -39,6 +39,7 @@ type Item struct {
 	Cast      []CastEntry `json:"cast,omitempty"`
 	Subtitles []Subtitle  `json:"subtitles,omitempty"`
 	Trailers  []Trailer   `json:"trailers,omitempty"`
+	Extras    []Extra     `json:"extras,omitempty"`
 	Segments  *SegSummary `json:"segments,omitempty"`
 
 	// Roles is set on a person's filmography only (GET /people/{id}): the
@@ -87,6 +88,25 @@ type Trailer struct {
 	ExternalID string `json:"external_id,omitempty"`
 	URL        string `json:"url,omitempty"`
 	Title      string `json:"title,omitempty"`
+}
+
+// Extra is one of a movie's or a series' extras that plays: bonus material
+// that is a file of its own (a trailer, a teaser, a featurette, a deleted
+// scene, …), packaged for streaming apart from the title. ID is the extra's
+// id, which its playback path names; Kind is katalog-manager's vocabulary
+// (trailer, teaser, featurette, behind-the-scenes, making-of, deleted-scene,
+// interview, gag-reel, short, other). Title is what a viewer sees: an
+// admin's label, else the title the extra was taken in with. Language (BCP
+// 47) and DurationMs are omitted when unknown. SeasonNumber is set only on a
+// series' extra that belongs to a season; a pointer, so the specials, 0, are
+// sent.
+type Extra struct {
+	ID           string `json:"id"`
+	Kind         string `json:"kind"`
+	Title        string `json:"title"`
+	Language     string `json:"language,omitempty"`
+	DurationMs   int64  `json:"duration_ms,omitempty"`
+	SeasonNumber *int   `json:"season_number,omitempty"`
 }
 
 // SegSummary is the rollup chino-web's player uses to decide whether to

@@ -81,8 +81,12 @@ func TestParseInclude(t *testing.T) {
 		{"GENRES,people,segments", store.IncludeOpts{Genres: true, People: true, Segments: true}},
 		// Whitespace + unknown tokens are tolerated.
 		{" genres , bogus , trailers ", store.IncludeOpts{Genres: true, Trailers: true}},
-		{"genres,people,subtitles,trailers,segments", store.IncludeOpts{
-			Genres: true, People: true, Subtitles: true, Trailers: true, Segments: true,
+		// extras are the item's own packaged files, apart from the
+		// trailer links.
+		{"extras", store.IncludeOpts{Extras: true}},
+		{"trailers, EXTRAS", store.IncludeOpts{Trailers: true, Extras: true}},
+		{"genres,people,subtitles,trailers,extras,segments", store.IncludeOpts{
+			Genres: true, People: true, Subtitles: true, Trailers: true, Extras: true, Segments: true,
 		}},
 	}
 	for _, c := range cases {

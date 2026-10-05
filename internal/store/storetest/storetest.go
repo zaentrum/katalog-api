@@ -8,10 +8,10 @@
 // Each test gets a schema of its own, dropped when the test ends. It holds the
 // catalog tables this service reads as a catalog older than migration 030 has
 // them, column for column as katalog-manager creates them (lowercase, as
-// Postgres folded the CAP DDL). Migrate030, Migrate032 and Migrate036 bring
-// the schema forward, so a test can prove a query works on a catalog before
-// and after a migration — the catalog is katalog-manager's, and it migrates
-// while this service runs.
+// Postgres folded the CAP DDL). Migrate030, Migrate032, Migrate036 and
+// Migrate038 bring the schema forward, so a test can prove a query works on a
+// catalog before and after a migration — the catalog is katalog-manager's, and
+// it migrates while this service runs.
 package storetest
 
 import (
@@ -93,6 +93,13 @@ func (db *DB) Migrate032(t testing.TB) {
 func (db *DB) Migrate036(t testing.TB) {
 	t.Helper()
 	db.Exec(t, migration036)
+}
+
+// Migrate038 adds what migration 038 adds: a movie's or a series' extras, one
+// row per extra, with what a viewer is shown of it and its package.
+func (db *DB) Migrate038(t testing.TB) {
+	t.Helper()
+	db.Exec(t, migration038)
 }
 
 // Exec runs one statement (or several, without arguments) in the schema and
@@ -289,4 +296,41 @@ ALTER TABLE com_nalet_katalog_items
   ADD COLUMN IF NOT EXISTS certification_fetched_at TIMESTAMPTZ;
 CREATE INDEX IF NOT EXISTS idx_items_rated_age
   ON com_nalet_katalog_items ((COALESCE(min_age_override, min_age)));
+`
+
+// migration038 is katalog-manager's 038_item_extras.sql, as the catalog
+// contract defines it: one row per extra of a movie or a series (never an
+// episode), keyed by the extra's id, with how it was taken in, what a viewer
+// is shown of it (its order, whether it is hidden, a label), where its
+// packaging stands, its package, and when it was removed. An extra plays when
+// it is packaged, not removed, not hidden and its source is not missing.
+const migration038 = `
+CREATE TABLE IF NOT EXISTS com_nalet_katalog_itemextras (
+  id VARCHAR(36) PRIMARY KEY,
+  item_id VARCHAR(36) NOT NULL,
+  kind VARCHAR(20) NOT NULL CHECK (kind IN ('featurette','behind-the-scenes','making-of','deleted-scene',
+       'interview','trailer','teaser','gag-reel','short','other')),
+  title VARCHAR(255) NOT NULL CHECK (title <> ''),
+  localizedtitles JSONB CHECK (localizedtitles IS NULL OR jsonb_typeof(localizedtitles)='object'),
+  language VARCHAR(35), seasonnumber INTEGER CHECK (seasonnumber IS NULL OR seasonnumber >= 0),
+  origin JSONB CHECK (origin IS NULL OR jsonb_typeof(origin)='object'),
+  sourcepath VARCHAR(2048), sourcesize BIGINT,
+  sourceqh1 VARCHAR(71) CHECK (sourceqh1 IS NULL OR sourceqh1 ~ '^sha256:[0-9a-f]{64}$'),
+  recordpath VARCHAR(2048),
+  registeredby VARCHAR(10) NOT NULL CHECK (registeredby IN ('api','scanner','library')),
+  sortorder INTEGER, hidden BOOLEAN NOT NULL DEFAULT false, label VARCHAR(255),
+  state VARCHAR(12) NOT NULL DEFAULT 'pending' CHECK (state IN
+       ('pending','queued','transcoding','transcoded','packaging','ready','failed','missing')),
+  error VARCHAR(500), attempts INTEGER NOT NULL DEFAULT 0, failures INTEGER NOT NULL DEFAULT 0,
+  nextretryat TIMESTAMPTZ, dispatchedat TIMESTAMPTZ, heartbeatat TIMESTAMPTZ,
+  packagepath VARCHAR(2048), packagedat TIMESTAMPTZ, durationms BIGINT, videocodec VARCHAR(40),
+  width INTEGER, height INTEGER, peakbandwidthbps BIGINT, packagesizebytes BIGINT,
+  removedat TIMESTAMPTZ, removedby VARCHAR(255), removalreason VARCHAR(500),
+  createdat TIMESTAMPTZ NOT NULL DEFAULT now(), createdby VARCHAR(255),
+  modifiedat TIMESTAMPTZ NOT NULL DEFAULT now(), modifiedby VARCHAR(255));
+CREATE INDEX IF NOT EXISTS idx_itemextras_item ON com_nalet_katalog_itemextras (item_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_itemextras_source ON com_nalet_katalog_itemextras (sourcepath)
+  WHERE removedat IS NULL AND sourcepath IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_itemextras_due ON com_nalet_katalog_itemextras (state, nextretryat)
+  WHERE removedat IS NULL AND state NOT IN ('ready','failed');
 `
