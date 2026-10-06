@@ -95,9 +95,13 @@ func (s *Store) SubtitleAsset(ctx context.Context, subID string) (SubtitleAssetI
 	return a, err
 }
 
-// PrimaryAsset returns the primary playback asset for an item. If no row has
-// isprimary=true it falls back to the first asset by path. Returns
-// ErrNotFound when the item has no assets.
+// PrimaryAsset returns the primary playback asset for an item: the file it was
+// taken in from. If no row has isprimary=true it falls back to the first of the
+// item's files by path. Both read only the item's files, assets of kind
+// primary (a row without a kind is one): never its package (kind packaged),
+// nor an original that was retired once its package was recorded (kind
+// original), whose file is gone. Returns ErrNotFound when the item has no such
+// asset.
 func (s *Store) PrimaryAsset(ctx context.Context, itemID string) (Asset, error) {
 	if s == nil || s.Pool == nil {
 		return Asset{}, ErrNoPool
@@ -105,7 +109,8 @@ func (s *Store) PrimaryAsset(ctx context.Context, itemID string) (Asset, error) 
 	var a Asset
 	err := s.Pool.QueryRow(ctx,
 		`SELECT path, isprimary FROM com_nalet_katalog_playbackassets
-		 WHERE item_id = $1 AND isprimary = true LIMIT 1`, itemID).Scan(&a.Path, &a.IsPrimary)
+		 WHERE item_id = $1 AND isprimary = true AND COALESCE(kind, 'primary') = 'primary' LIMIT 1`,
+		itemID).Scan(&a.Path, &a.IsPrimary)
 	if err == nil {
 		return a, nil
 	}
@@ -114,7 +119,8 @@ func (s *Store) PrimaryAsset(ctx context.Context, itemID string) (Asset, error) 
 	}
 	err = s.Pool.QueryRow(ctx,
 		`SELECT path, isprimary FROM com_nalet_katalog_playbackassets
-		 WHERE item_id = $1 ORDER BY path LIMIT 1`, itemID).Scan(&a.Path, &a.IsPrimary)
+		 WHERE item_id = $1 AND COALESCE(kind, 'primary') = 'primary' ORDER BY path LIMIT 1`,
+		itemID).Scan(&a.Path, &a.IsPrimary)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Asset{}, ErrNotFound
 	}
