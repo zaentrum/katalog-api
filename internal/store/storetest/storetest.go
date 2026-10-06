@@ -8,10 +8,10 @@
 // Each test gets a schema of its own, dropped when the test ends. It holds the
 // catalog tables this service reads as a catalog older than migration 030 has
 // them, column for column as katalog-manager creates them (lowercase, as
-// Postgres folded the CAP DDL). Migrate030, Migrate032, Migrate036 and
-// Migrate039 bring the schema forward, so a test can prove a query works on a
-// catalog before and after a migration — the catalog is katalog-manager's, and
-// it migrates while this service runs.
+// Postgres folded the CAP DDL). Migrate030, Migrate032, Migrate036, Migrate039
+// and Migrate040 bring the schema forward, so a test can prove a query works
+// on a catalog before and after a migration — the catalog is katalog-manager's,
+// and it migrates while this service runs.
 package storetest
 
 import (
@@ -100,6 +100,17 @@ func (db *DB) Migrate036(t testing.TB) {
 func (db *DB) Migrate039(t testing.TB) {
 	t.Helper()
 	db.Exec(t, migration039)
+}
+
+// Migrate040 adds what migration 040 adds, the library's tables: an item's
+// sources (its originals) and versions (its packages), the source and the
+// version a playback asset is of, and an extra's package id and when it was
+// recorded. A catalog has 039 before it has 040, and 040 alters 039's table,
+// so 039 is applied first (it is idempotent, as 040 is).
+func (db *DB) Migrate040(t testing.TB) {
+	t.Helper()
+	db.Exec(t, migration039)
+	db.Exec(t, migration040)
 }
 
 // Exec runs one statement (or several, without arguments) in the schema and
@@ -200,7 +211,7 @@ func firstLine(s string) string {
 }
 
 // baseSchema is the part of the CAP base schema this service's people,
-// similarity, segment and rating queries read.
+// similarity, segment, rating and playback queries read.
 const baseSchema = `
 CREATE TABLE com_nalet_katalog_items (
   id VARCHAR(36) NOT NULL PRIMARY KEY,
@@ -229,6 +240,13 @@ CREATE TABLE com_nalet_katalog_mediasegments (
   createdat TIMESTAMP, createdby VARCHAR(255), modifiedat TIMESTAMP, modifiedby VARCHAR(255),
   item_id VARCHAR(36) NOT NULL, kind VARCHAR(20) NOT NULL, startms BIGINT NOT NULL, endms BIGINT NOT NULL,
   source VARCHAR(30) NOT NULL, confidence DECIMAL(3, 2), label VARCHAR(120)
+);
+CREATE TABLE com_nalet_katalog_playbackassets (
+  id VARCHAR(36) NOT NULL PRIMARY KEY, item_id VARCHAR(36) NOT NULL,
+  path VARCHAR(2048) NOT NULL, codec VARCHAR(40), resolution VARCHAR(40), bitratekbps INTEGER,
+  sizebytes BIGINT, hash VARCHAR(160), isprimary BOOLEAN DEFAULT FALSE, kind VARCHAR(20) DEFAULT 'primary',
+  audiocodec VARCHAR(40), audiolanguage VARCHAR(10), audiochannels INTEGER, audiobitratekbps INTEGER,
+  audiotrackcount INTEGER, subtitletrackcount INTEGER, durationms BIGINT
 );
 CREATE TABLE com_nalet_katalog_settings (
   id VARCHAR(36) NOT NULL PRIMARY KEY,
@@ -333,4 +351,59 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_itemextras_source ON com_nalet_katalog_ite
   WHERE removedat IS NULL AND sourcepath IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_itemextras_due ON com_nalet_katalog_itemextras (state, nextretryat)
   WHERE removedat IS NULL AND state NOT IN ('ready','failed');
+`
+
+// migration040 is katalog-manager's 040_library_v2.sql, verbatim as the library
+// contract defines it: when an item was recorded in the library and projected,
+// and its hold; a person's projection; an item's sources (its originals, while
+// they exist) and versions (its packages: one building, one complete, the
+// superseded ones until they are removed); the source and the version a
+// playback asset is of; an extra's package id, when it was recorded and when
+// its original was deleted; and SELECT on the new tables for the read-only
+// role, where there is one.
+const migration040 = `
+ALTER TABLE com_nalet_katalog_items
+  ADD COLUMN IF NOT EXISTS recordedat TIMESTAMPTZ,            -- item.json written
+  ADD COLUMN IF NOT EXISTS libraryprojectedat TIMESTAMP,      -- the modifiedat the last metadata.json reflects
+  ADD COLUMN IF NOT EXISTS retirehold BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE com_nalet_katalog_people
+  ADD COLUMN IF NOT EXISTS libraryprojectedat TIMESTAMPTZ;
+CREATE TABLE IF NOT EXISTS com_nalet_katalog_itemsources (
+  id VARCHAR(36) PRIMARY KEY,                    -- the sourceId: sources/<id>/
+  item_id VARCHAR(36) NOT NULL,
+  filename VARCHAR(1024) NOT NULL,               -- source.json file.name
+  arrivalpath VARCHAR(2048),                     -- absolute, while the original exists; NULL after retire
+  librarypath VARCHAR(2048),                     -- relative to ARRIVALS_ROOT (source.json origin.libraryPath)
+  sizebytes BIGINT NOT NULL,
+  qh1 VARCHAR(71) CHECK (qh1 IS NULL OR qh1 ~ '^sha256:[0-9a-f]{64}$'),
+  state VARCHAR(12) NOT NULL DEFAULT 'present' CHECK (state IN ('present','retiring','deleted','removed')),
+  recordedat TIMESTAMPTZ, recorddir VARCHAR(2048),
+  sidecars JSONB CHECK (sidecars IS NULL OR jsonb_typeof(sidecars)='array'),  -- [{subtitleAssetId, rendition, path}]
+  retireeventid VARCHAR(36), retireeventat TIMESTAMPTZ, trashpath VARCHAR(2048),
+  deletedat TIMESTAMPTZ, deletedby VARCHAR(255), lost JSONB, error VARCHAR(500),
+  createdat TIMESTAMPTZ NOT NULL DEFAULT now(), modifiedat TIMESTAMPTZ NOT NULL DEFAULT now());
+CREATE INDEX IF NOT EXISTS idx_itemsources_item ON com_nalet_katalog_itemsources (item_id);
+CREATE INDEX IF NOT EXISTS idx_itemsources_fixity ON com_nalet_katalog_itemsources (sizebytes, qh1);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_itemsources_arrival ON com_nalet_katalog_itemsources (arrivalpath) WHERE arrivalpath IS NOT NULL;
+CREATE TABLE IF NOT EXISTS com_nalet_katalog_itemversions (
+  id VARCHAR(36) PRIMARY KEY,                    -- the versionId: versions/<id>/
+  item_id VARCHAR(36) NOT NULL,
+  sourceids VARCHAR(36)[] NOT NULL DEFAULT '{}',
+  state VARCHAR(12) NOT NULL CHECK (state IN ('building','complete','superseded','removed')),
+  packageid VARCHAR(36), dir VARCHAR(2048),
+  completedat TIMESTAMPTZ, verifiedat TIMESTAMPTZ,
+  verifiedlevel VARCHAR(8) CHECK (verifiedlevel IS NULL OR verifiedlevel IN ('chain','full')),
+  supersededby VARCHAR(36), supersededat TIMESTAMPTZ, supersedeeventid VARCHAR(36),
+  removedat TIMESTAMPTZ, removeeventid VARCHAR(36),
+  createdat TIMESTAMPTZ NOT NULL DEFAULT now(), modifiedat TIMESTAMPTZ NOT NULL DEFAULT now());
+CREATE INDEX IF NOT EXISTS idx_itemversions_item ON com_nalet_katalog_itemversions (item_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_itemversions_building ON com_nalet_katalog_itemversions (item_id) WHERE state='building';
+CREATE UNIQUE INDEX IF NOT EXISTS idx_itemversions_current  ON com_nalet_katalog_itemversions (item_id) WHERE state='complete';
+ALTER TABLE com_nalet_katalog_playbackassets
+  ADD COLUMN IF NOT EXISTS sourceid VARCHAR(36), ADD COLUMN IF NOT EXISTS versionid VARCHAR(36);
+ALTER TABLE com_nalet_katalog_itemextras
+  ADD COLUMN IF NOT EXISTS packageid VARCHAR(36), ADD COLUMN IF NOT EXISTS recordedat TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS sourcedeletedat TIMESTAMPTZ;
+DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname='cloud_katalog_ro') THEN
+  GRANT SELECT ON com_nalet_katalog_itemsources, com_nalet_katalog_itemversions TO cloud_katalog_ro; END IF; END $$;
 `
