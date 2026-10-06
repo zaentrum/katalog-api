@@ -42,6 +42,16 @@ func NewRouter(cfg config.Config, st *store.Store, verifier *auth.Verifier) (htt
 	// an on-disk path so they can serve the .vtt straight off the packages
 	// PVC instead of round-tripping the bytes through katalog-api.
 	r.Get("/api/v1/subtitles/{id}/asset", items.SubtitleAsset)
+	// Same trust model for where the stream services play from: an item's
+	// package (the version complete now, or a package from before the
+	// library), the superseded versions a running session may finish on, and
+	// its original while it exists; an extra's package; and which movies and
+	// episodes are packaged at all (the Zap pool). katalog-manager records
+	// every path, so a stream service neither computes one nor walks the
+	// storage.
+	r.Get("/api/v1/items/{id}/playback", items.Playback)
+	r.Get("/api/v1/extras/{extraId}/playback", items.ExtraPlayback)
+	r.Get("/api/v1/packaged-ids", items.PackagedIDs)
 	// Same trust model for the titles a viewer capped at an age may be
 	// served (?ids=&max_rating=): chino-api asks it for a capped viewer's
 	// requests that a stream token authorizes, which carry no bearer.
