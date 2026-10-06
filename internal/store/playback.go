@@ -258,3 +258,29 @@ func (s *Store) ExtraPlayback(ctx context.Context, extraID string) (ExtraPlaybac
 	}
 	return x, nil
 }
+
+// PackagedIDs returns the ids of the movies and episodes that have a package,
+// in id order: those with a packaged asset, which katalog-manager writes when
+// it records an item's package, before the library and in it alike.
+func (s *Store) PackagedIDs(ctx context.Context) ([]string, error) {
+	if s == nil || s.Pool == nil {
+		return nil, ErrNoPool
+	}
+	rows, err := s.Pool.Query(ctx, `
+		SELECT DISTINCT p.item_id
+		FROM com_nalet_katalog_playbackassets p
+		JOIN com_nalet_katalog_items i ON i.id = p.item_id
+		WHERE p.kind = 'packaged' AND i.type IN ('movie', 'episode')
+		ORDER BY p.item_id`)
+	if err != nil {
+		return nil, fmt.Errorf("packaged ids: %w", err)
+	}
+	ids, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		return nil, fmt.Errorf("packaged ids: %w", err)
+	}
+	if ids == nil {
+		ids = []string{}
+	}
+	return ids, nil
+}
