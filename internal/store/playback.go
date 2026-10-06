@@ -196,3 +196,65 @@ func recordOf(p string) string {
 	}
 	return recordManifest
 }
+
+// ExtraPlayback is where an extra's package is: its folder (Dir) and the
+// record in it (Record: package.json for an extra packaged into the library,
+// manifest.json for one in the package store), the title it belongs to
+// (ItemID), and when it was packaged.
+type ExtraPlayback struct {
+	ExtraID    string    `json:"extraId"`
+	ItemID     string    `json:"itemId"`
+	Dir        string    `json:"dir"`
+	Record     string    `json:"record"`
+	PackagedAt time.Time `json:"packagedAt"`
+}
+
+// extraPackageColumns are the columns of com_nalet_katalog_itemextras
+// (migration 039) an extra's package is read from; extraPackageColumns040 adds
+// 040's package id, which an extra packaged into the library has.
+var (
+	extraPackageColumns    = []string{"id", "item_id", "packagepath", "packagedat", "removedat"}
+	extraPackageColumns040 = []string{"id", "item_id", "packagepath", "packagedat", "removedat", "packageid"}
+)
+
+// ExtraPlayback returns where the extra extraID's package is. It is
+// ErrNotFound unless the extra is packaged and not removed (a hidden one, and
+// one whose original went missing, keep their package), as on a catalog
+// without migration 039 or with a role that may not read the extras.
+func (s *Store) ExtraPlayback(ctx context.Context, extraID string) (ExtraPlayback, error) {
+	if s == nil || s.Pool == nil {
+		return ExtraPlayback{}, ErrNoPool
+	}
+	has, err := s.columns(ctx, "com_nalet_katalog_itemextras", extraPackageColumns040...)
+	if err != nil {
+		return ExtraPlayback{}, err
+	}
+	if !all(has, extraPackageColumns...) {
+		return ExtraPlayback{}, ErrNotFound
+	}
+	packageID := "NULL::text"
+	if has["packageid"] {
+		packageID = "packageid"
+	}
+	var (
+		x   ExtraPlayback
+		pid *string
+	)
+	err = s.Pool.QueryRow(ctx, `
+		SELECT id, item_id, packagepath, packagedat, `+packageID+`
+		FROM com_nalet_katalog_itemextras
+		WHERE id = $1 AND packagedat IS NOT NULL AND removedat IS NULL AND packagepath IS NOT NULL`,
+		extraID).Scan(&x.ExtraID, &x.ItemID, &x.Dir, &x.PackagedAt, &pid)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ExtraPlayback{}, ErrNotFound
+	}
+	if err != nil {
+		return ExtraPlayback{}, fmt.Errorf("playback of extra %s: %w", extraID, err)
+	}
+	x.PackagedAt = x.PackagedAt.UTC()
+	x.Record = recordManifest
+	if pid != nil {
+		x.Record = recordPackage
+	}
+	return x, nil
+}

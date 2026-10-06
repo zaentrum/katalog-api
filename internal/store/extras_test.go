@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -214,5 +215,126 @@ func TestACappedViewerGetsTheExtrasOfWhatTheCapAllows(t *testing.T) {
 		if got, err := extrasOf(context.Background(), t, st, id); err != nil || got != "x-"+id+":Trailer" {
 			t.Errorf("uncapped, %s: %q %v, want its extra", id, got, err)
 		}
+	}
+}
+
+// extraPlaybackOf is ExtraPlayback of extra as it goes on the wire, or its
+// error.
+func extraPlaybackOf(t *testing.T, st *Store, extra string) string {
+	t.Helper()
+	x, err := st.ExtraPlayback(context.Background(), extra)
+	if err != nil {
+		return err.Error()
+	}
+	b, err := json.Marshal(x)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
+}
+
+// An extra's package is where it is while the extra is packaged and not
+// removed: also while it is hidden, while its original is missing, and while
+// it is packaged anew (the package it had plays on). One never packaged, one
+// removed, one with a folder but no packagedat, and an id of no extra are not
+// found. Before the library the package is the package store's folder, read
+// by its manifest.json; after 040 an extra packaged into the library (it has a
+// package id) is read by its package.json, and one from before as it was.
+func TestWhereAnExtrasPackageIs(t *testing.T) {
+	st, db := open(t)
+	db.Migrate039(t)
+	addItem(t, db, "m1", "movie", "A Film", 2001, 7)
+	db.Exec(t, `INSERT INTO com_nalet_katalog_itemextras
+			(id, item_id, kind, title, registeredby, state, hidden, packagepath, packagedat, removedat) VALUES
+		('xready',   'm1', 'trailer', 'Trailer',   'api',     'ready',     false, '/var/lib/katalog/packages/extras/xr/xready',   '2026-10-05 08:00:00+00', NULL),
+		('xhidden',  'm1', 'teaser',  'Teaser',    'api',     'ready',     true,  '/var/lib/katalog/packages/extras/xh/xhidden',  '2026-10-05 08:01:00+00', NULL),
+		('xmissing', 'm1', 'trailer', 'Missing',   'scanner', 'missing',   false, '/var/lib/katalog/packages/extras/xm/xmissing', '2026-10-05 08:02:00+00', NULL),
+		('xanew',    'm1', 'trailer', 'Anew',      'api',     'packaging', false, '/var/lib/katalog/packages/extras/xa/xanew',    '2026-10-05 08:03:00+02', NULL),
+		('xremoved', 'm1', 'trailer', 'Removed',   'api',     'ready',     false, '/var/lib/katalog/packages/extras/xr/xremoved', '2026-10-05 08:04:00+00', now()),
+		('xpurged',  'm1', 'trailer', 'Purged',    'api',     'ready',     false, NULL,                                          '2026-10-05 08:05:00+00', now()),
+		('xpending', 'm1', 'trailer', 'Pending',   'api',     'pending',   false, NULL,                                          NULL,                     NULL),
+		('xfailed',  'm1', 'trailer', 'Failed',    'api',     'failed',    false, NULL,                                          NULL,                     NULL),
+		('xstamped', 'm1', 'trailer', 'Unstamped', 'api',     'ready',     false, '/var/lib/katalog/packages/extras/xs/xstamped', NULL,                     NULL)`)
+	pkg := func(id, dir, record, at string) string {
+		return `{"extraId":"` + id + `","itemId":"m1","dir":"` + dir + `","record":"` + record + `","packagedAt":"` + at + `"}`
+	}
+	want := map[string]string{
+		"xready":   pkg("xready", "/var/lib/katalog/packages/extras/xr/xready", "manifest.json", "2026-10-05T08:00:00Z"),
+		"xhidden":  pkg("xhidden", "/var/lib/katalog/packages/extras/xh/xhidden", "manifest.json", "2026-10-05T08:01:00Z"),
+		"xmissing": pkg("xmissing", "/var/lib/katalog/packages/extras/xm/xmissing", "manifest.json", "2026-10-05T08:02:00Z"),
+		"xanew":    pkg("xanew", "/var/lib/katalog/packages/extras/xa/xanew", "manifest.json", "2026-10-05T06:03:00Z"),
+		"xremoved": "not found", "xpurged": "not found", "xpending": "not found", "xfailed": "not found", "xstamped": "not found",
+		"nothing": "not found",
+	}
+	for _, when := range []string{"before 040", "after 040"} {
+		if when == "after 040" {
+			db.Migrate040(t) // while the service is up
+		}
+		for id, w := range want {
+			if got := extraPlaybackOf(t, st, id); got != w {
+				t.Errorf("%s, %s:\n got %s\nwant %s", when, id, got, w)
+			}
+		}
+	}
+
+	db.Exec(t, `INSERT INTO com_nalet_katalog_itemextras
+			(id, item_id, kind, title, registeredby, state, packagepath, packagedat, packageid, recordedat) VALUES
+		('xlib', 'm1', 'featurette', 'Making Of', 'api', 'ready', '/var/lib/katalog/movies/m1/m1/extras/xlib',
+		 '2026-10-06 09:00:00+00', 'p1', '2026-10-06 09:00:00+00')`)
+	if got, w := extraPlaybackOf(t, st, "xlib"), pkg("xlib", "/var/lib/katalog/movies/m1/m1/extras/xlib", "package.json",
+		"2026-10-06T09:00:00Z"); got != w {
+		t.Errorf("in the library:\n got %s\nwant %s", got, w)
+	}
+}
+
+// On a catalog without migration 039 no extra is found, rather than failing;
+// the table is looked for again on the next request, so an extra is found as
+// soon as the migration has run, without a restart.
+func TestExtraPlaybackOnACatalogOlderThan039(t *testing.T) {
+	st, db := open(t)
+	addItem(t, db, "m1", "movie", "A Film", 2001, 7)
+	for i := 1; i <= 2; i++ {
+		if got := extraPlaybackOf(t, st, "x1"); got != "not found" {
+			t.Fatalf("before 039, call %d: %s, want not found", i, got)
+		}
+	}
+	db.Migrate039(t)
+	db.Exec(t, `INSERT INTO com_nalet_katalog_itemextras (id, item_id, kind, title, registeredby, state, packagepath, packagedat)
+		VALUES ('x1', 'm1', 'trailer', 'Trailer', 'api', 'ready', '/var/lib/katalog/packages/extras/x1/x1', '2026-10-05 08:00:00+00')`)
+	w := `{"extraId":"x1","itemId":"m1","dir":"/var/lib/katalog/packages/extras/x1/x1","record":"manifest.json","packagedAt":"2026-10-05T08:00:00Z"}`
+	if got := extraPlaybackOf(t, st, "x1"); got != w {
+		t.Fatalf("after 039:\n got %s\nwant %s", got, w)
+	}
+}
+
+// A role that may not read the extras, or not every column an extra's package
+// is read from, finds none; granted the table it finds them, and after 040 it
+// reads an extra's package id too: a grant of the table covers the columns a
+// migration adds to it.
+func TestExtraPlaybackWhenTheRoleMayNotReadIt(t *testing.T) {
+	_, db := open(t)
+	db.Migrate039(t)
+	addItem(t, db, "m1", "movie", "A Film", 2001, 7)
+	db.Exec(t, `INSERT INTO com_nalet_katalog_itemextras (id, item_id, kind, title, registeredby, state, packagepath, packagedat)
+		VALUES ('x1', 'm1', 'trailer', 'Trailer', 'api', 'ready', '/var/lib/katalog/movies/m1/m1/extras/x1', '2026-10-06 09:00:00+00')`)
+	role, pool := db.Role(t)
+	st := &Store{Pool: pool}
+	if got := extraPlaybackOf(t, st, "x1"); got != "not found" {
+		t.Fatalf("without the grant: %s, want not found", got)
+	}
+	db.Exec(t, `GRANT SELECT (id, item_id, packagepath) ON com_nalet_katalog_itemextras TO `+role)
+	if got := extraPlaybackOf(t, st, "x1"); got != "not found" {
+		t.Fatalf("granted some of the columns: %s, want not found", got)
+	}
+	db.Exec(t, `GRANT SELECT ON com_nalet_katalog_itemextras TO `+role)
+	w := `{"extraId":"x1","itemId":"m1","dir":"/var/lib/katalog/movies/m1/m1/extras/x1","record":"manifest.json","packagedAt":"2026-10-06T09:00:00Z"}`
+	if got := extraPlaybackOf(t, st, "x1"); got != w {
+		t.Fatalf("with the grant:\n got %s\nwant %s", got, w)
+	}
+	db.Migrate040(t)
+	db.Exec(t, `UPDATE com_nalet_katalog_itemextras SET packageid = 'p1', recordedat = now() WHERE id = 'x1'`)
+	w = strings.Replace(w, "manifest.json", "package.json", 1)
+	if got := extraPlaybackOf(t, st, "x1"); got != w {
+		t.Fatalf("after 040:\n got %s\nwant %s", got, w)
 	}
 }
