@@ -6,9 +6,9 @@ Postgres tables under the `cloud_katalog_ro` role and serves product apps
 
 ## Status
 
-Serves browse, search, item detail, people and the stream services' asset
-lookups over the catalog tables; `/healthz` and `/metrics` alongside. The
-surface is described in [`api/openapi.yaml`](api/openapi.yaml).
+Serves browse, search, item detail, people and the stream services' asset and
+playback lookups over the catalog tables; `/healthz` and `/metrics` alongside.
+The surface is described in [`api/openapi.yaml`](api/openapi.yaml).
 
 ## Design
 
@@ -105,6 +105,82 @@ at that cap may be served, `{"ids": [...]}` in their order. It is for the
 requests a stream token authorizes, which carry the cap and no bearer, and like
 the asset routes it takes no bearer: the Service is in-cluster only.
 
+## Playback lookups
+
+The stream services find what they play through the catalog: katalog-manager
+records every path of the library as it packages, so a stream service neither
+computes a path nor walks the storage to learn what is packaged. These routes
+are internal: like the asset routes they take no bearer (the Service is
+in-cluster only, with no route out) and apply no rating cap, as a stream token
+already authorizes the request.
+
+`GET /api/v1/items/{id}/playback` is where an item's package and its original
+are:
+
+```json
+{"itemId": "f001aeff-9c18-4183-b51b-51403af2515e", "type": "movie",
+ "package": {"versionId": "9a2e4f60-1b2c-4d3e-8f4a-5b6c7d8e9f00",
+             "dir": "/var/lib/katalog/movies/f0/f001aeff-9c18-4183-b51b-51403af2515e/versions/9a2e4f60-1b2c-4d3e-8f4a-5b6c7d8e9f00",
+             "record": "package.json", "completedAt": "2026-10-06T09:00:00Z"},
+ "previous": [{"versionId": "77c1d2e3-f405-4a6b-9c8d-0e1f2a3b4c5d",
+               "dir": "/var/lib/katalog/movies/f0/f001aeff-9c18-4183-b51b-51403af2515e/versions/77c1d2e3-f405-4a6b-9c8d-0e1f2a3b4c5d",
+               "record": "package.json"}],
+ "original": {"path": "/var/lib/katalog/.work/incoming/Sintel (2010).mkv", "sourceId": "0b6c6a52-8d1e-4f3a-9b2c-1d4e5f6a7b8c"}}
+```
+
+- `package` is the package that plays: the item's complete version
+  (katalog-manager's migration 040, `com_nalet_katalog_itemversions`), its
+  folder, and the record in it to read the package by. `null` when the item
+  has no package; a series has none.
+- `previous` are the item's superseded versions that are not removed yet, the
+  one superseded last first. A superseded version stays on the storage for a
+  grace before it is removed, so a playback session started on it may finish
+  on it.
+- `original` is the file the item was taken in from (its primary asset), with
+  the source it is (`sourceId`, `null` when the catalog does not say); `null`
+  once it was retired after packaging, or when there is none.
+- 404 for an id of no item.
+
+Before 040, and for an item packaged before the library, the package is the
+folder of the item's packaged asset, read by its `manifest.json`, with no
+version, no `completedAt` and nothing previous:
+
+```json
+{"itemId": "f001aeff-9c18-4183-b51b-51403af2515e", "type": "movie",
+ "package": {"versionId": null, "dir": "/var/lib/katalog/packages/movies/f0/f001aeff-9c18-4183-b51b-51403af2515e",
+             "record": "manifest.json"},
+ "previous": [],
+ "original": {"path": "/var/lib/katalog/media/Sintel (2010).mkv", "sourceId": null}}
+```
+
+`GET /api/v1/extras/{extraId}/playback` is where an extra's package is: its
+folder, the record to read it by (`package.json` for an extra packaged into its
+title's folder in the library, `manifest.json` for one in the package store),
+the title it belongs to and when it was packaged. 404 unless the extra is
+packaged and not removed; a hidden one, or one whose original went missing,
+still plays by its id.
+
+```json
+{"extraId": "2b7c9e10-3d4f-4a5b-8c6d-7e8f9a0b1c2d", "itemId": "ea886f9b-0d06-4f0f-babb-d2a1162f9b01",
+ "dir": "/var/lib/katalog/movies/ea/ea886f9b-0d06-4f0f-babb-d2a1162f9b01/extras/2b7c9e10-3d4f-4a5b-8c6d-7e8f9a0b1c2d",
+ "record": "package.json", "packagedAt": "2026-10-06T11:00:00Z"}
+```
+
+`GET /api/v1/packaged-ids` answers `{"ids": [...]}`: the movies and episodes
+that have a packaged asset, in id order, before the library and in it alike.
+
+`GET /api/v1/items/{id}/asset` answers the item's file: its primary asset, else
+the first of its files by path. It never answers the item's package, nor an
+original retired after packaging (whose file is gone): an item that has
+nothing else is 404.
+
+A read-only role granted the catalog's tables before 040 created the versions'
+may not read them until it is granted them (`GRANT SELECT ON
+com_nalet_katalog_itemversions TO <role>`; 040 grants `cloud_katalog_ro`).
+Until then an item is answered from its packaged asset, which in the library
+is its version's `package.json`, so the same folder plays, with nothing
+previous.
+
 ## Catalog schema
 
 The tables belong to katalog-manager, which migrates them while this service
@@ -140,8 +216,8 @@ go test ./...
 The store and handler tests that need PostgreSQL are skipped unless
 `KATALOG_API_TEST_DATABASE_URL` names a database in which they may create
 and drop schemas and roles (each test makes its own schema, with the catalog
-tables before and after the migrations it reads: 030, 032, 036 and 039). A
-throwaway server:
+tables before and after the migrations it reads: 030, 032, 036, 039 and 040).
+A throwaway server:
 
 ```bash
 initdb -D /tmp/pg-katalog-api -U postgres --auth=trust

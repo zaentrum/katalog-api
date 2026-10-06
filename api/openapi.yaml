@@ -112,6 +112,80 @@ paths:
                       type: string
         "400":
           description: No max_rating, or more than 500 ids
+  /api/v1/items/{id}/playback:
+    get:
+      summary: Where an item's package and its original are (internal)
+      description: >
+        For the stream services, which play what it names: the package that
+        plays, the superseded versions a running session may still finish
+        on, and the file the item was taken in from while there is one.
+        katalog-manager records every path of the library, so a stream
+        service computes none. Before katalog-manager's migration 040, and for
+        an item packaged before the library, the package is the folder of the
+        item's packaged asset, read by its manifest.json, with no version and
+        nothing previous; so too while the role may not read the versions.
+        It applies no rating cap and takes no bearer: the Service is
+        in-cluster only, as for the asset lookups.
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Where the item plays from
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Playback"
+        "404":
+          description: No such item
+  /api/v1/extras/{extraId}/playback:
+    get:
+      summary: Where an extra's package is (internal)
+      description: >
+        For the stream services: the folder of an extra's package, the record
+        to read it by, the title it belongs to and when it was packaged. An
+        extra plays by its id while it is packaged and not removed, also when
+        it is hidden or its original went missing. It takes no bearer: the
+        Service is in-cluster only, as for the asset lookups.
+      parameters:
+        - in: path
+          name: extraId
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Where the extra plays from
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ExtraPlayback"
+        "404":
+          description: No such extra, or one never packaged, or removed
+  /api/v1/packaged-ids:
+    get:
+      summary: Which movies and episodes have a package (internal)
+      description: >
+        For the stream services: the ids of the movies and episodes that have
+        a packaged asset, in id order, before the library and in it alike. It
+        takes no bearer: the Service is in-cluster only, as for the asset
+        lookups.
+      responses:
+        "200":
+          description: The packaged ids
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ids]
+                properties:
+                  ids:
+                    type: array
+                    items:
+                      type: string
   /api/v1/people:
     get:
       summary: Search people by name
@@ -431,3 +505,88 @@ components:
             $ref: "#/components/schemas/Item"
         nextCursor:
           type: string
+    Playback:
+      type: object
+      required: [itemId, type, package, previous, original]
+      properties:
+        itemId:
+          type: string
+        type:
+          type: string
+          example: movie
+        package:
+          description: >
+            The package that plays: the item's complete version, else (before
+            the library) its packaged asset's folder. null when the item has
+            no package; a series has none.
+          oneOf:
+            - $ref: "#/components/schemas/PackageRef"
+            - type: "null"
+        previous:
+          description: >
+            The item's superseded versions that are not removed yet, the one
+            superseded last first: a session started on one may finish on it.
+            Empty before the library.
+          type: array
+          items:
+            $ref: "#/components/schemas/PackageRef"
+        original:
+          description: >
+            The file the item was taken in from (its primary asset); null once
+            it was retired after packaging, or when there is none.
+          oneOf:
+            - $ref: "#/components/schemas/Original"
+            - type: "null"
+    PackageRef:
+      type: object
+      required: [versionId, dir, record]
+      description: One package's folder and the record in it to read the package by.
+      properties:
+        versionId:
+          type: [string, "null"]
+          description: The version it is; null for a package from before the library.
+        dir:
+          type: string
+          example: /var/lib/katalog/movies/f0/f001aeff-9c18-4183-b51b-51403af2515e/versions/9a2e4f60-1b2c-4d3e-8f4a-5b6c7d8e9f00
+        record:
+          type: string
+          enum: [package.json, manifest.json]
+          description: package.json for a version, manifest.json for a package from before the library.
+        completedAt:
+          type: string
+          format: date-time
+          description: >
+            When the complete version was completed, in UTC. Omitted for a
+            previous version and for a package from before the library.
+    Original:
+      type: object
+      required: [path, sourceId]
+      properties:
+        path:
+          type: string
+          example: /var/lib/katalog/.work/incoming/Sintel (2010).mkv
+        sourceId:
+          type: [string, "null"]
+          description: The source the file is; null when the catalog does not say.
+    ExtraPlayback:
+      type: object
+      required: [extraId, itemId, dir, record, packagedAt]
+      properties:
+        extraId:
+          type: string
+        itemId:
+          type: string
+          description: The movie or series the extra belongs to.
+        dir:
+          type: string
+          example: /var/lib/katalog/movies/ea/ea886f9b-0d06-4f0f-babb-d2a1162f9b01/extras/2b7c9e10-3d4f-4a5b-8c6d-7e8f9a0b1c2d
+        record:
+          type: string
+          enum: [package.json, manifest.json]
+          description: >
+            package.json for an extra packaged into its title's folder in the
+            library, manifest.json for one in the package store.
+        packagedAt:
+          type: string
+          format: date-time
+          description: When it was packaged, in UTC.
