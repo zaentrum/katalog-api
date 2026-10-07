@@ -95,6 +95,13 @@ func (db *DB) Migrate036(t testing.TB) {
 	db.Exec(t, migration036)
 }
 
+// Migrate038 adds what migration 038 adds: whether a subtitle is forced.
+func (db *DB) Migrate038(t testing.TB) {
+	t.Helper()
+	db.Exec(t, `ALTER TABLE com_nalet_katalog_subtitleassets
+  ADD COLUMN IF NOT EXISTS isforced BOOLEAN NOT NULL DEFAULT false`)
+}
+
 // Migrate039 adds what migration 039 adds: a movie's or a series' extras, one
 // row per extra, with what a viewer is shown of it and its package.
 func (db *DB) Migrate039(t testing.TB) {
@@ -247,6 +254,11 @@ CREATE TABLE com_nalet_katalog_playbackassets (
   sizebytes BIGINT, hash VARCHAR(160), isprimary BOOLEAN DEFAULT FALSE, kind VARCHAR(20) DEFAULT 'primary',
   audiocodec VARCHAR(40), audiolanguage VARCHAR(10), audiochannels INTEGER, audiobitratekbps INTEGER,
   audiotrackcount INTEGER, subtitletrackcount INTEGER, durationms BIGINT
+);
+CREATE TABLE com_nalet_katalog_subtitleassets (
+  id VARCHAR(36) NOT NULL PRIMARY KEY, item_id VARCHAR(36) NOT NULL,
+  path VARCHAR(2048), format VARCHAR(20), lang VARCHAR(10), label VARCHAR(200),
+  isdefault BOOLEAN DEFAULT FALSE
 );
 CREATE TABLE com_nalet_katalog_settings (
   id VARCHAR(36) NOT NULL PRIMARY KEY,

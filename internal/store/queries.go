@@ -674,10 +674,19 @@ func (s *Store) listPeopleFor(ctx context.Context, itemID string) ([]CastEntry, 
 // listSubtitlesFor returns one entry per SubtitleAssets row for the
 // item. `default` defaults to false in SQL — no need to COALESCE.
 func (s *Store) listSubtitlesFor(ctx context.Context, itemID string) ([]Subtitle, error) {
+	// isforced is katalog-manager's migration 038; before it, none is forced.
+	has, err := s.columns(ctx, "com_nalet_katalog_subtitleassets", "isforced")
+	if err != nil {
+		return nil, err
+	}
+	forced := "false"
+	if has["isforced"] {
+		forced = "COALESCE(isforced, false)"
+	}
 	rows, err := s.Pool.Query(ctx, `
 		SELECT id,
 		       COALESCE(lang, ''), COALESCE(label, ''),
-		       COALESCE(format, ''), COALESCE(isdefault, false)
+		       COALESCE(format, ''), COALESCE(isdefault, false), `+forced+`
 		FROM com_nalet_katalog_subtitleassets
 		WHERE item_id = $1
 		ORDER BY isdefault DESC, lang, id`, itemID)
@@ -688,7 +697,7 @@ func (s *Store) listSubtitlesFor(ctx context.Context, itemID string) ([]Subtitle
 	out := []Subtitle{}
 	for rows.Next() {
 		var s Subtitle
-		if err := rows.Scan(&s.ID, &s.Lang, &s.Label, &s.Format, &s.Default); err != nil {
+		if err := rows.Scan(&s.ID, &s.Lang, &s.Label, &s.Format, &s.Default, &s.Forced); err != nil {
 			return nil, err
 		}
 		out = append(out, s)

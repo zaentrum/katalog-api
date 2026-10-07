@@ -78,6 +78,10 @@ type Subtitle struct {
 	Label   string `json:"label,omitempty"`
 	Format  string `json:"format,omitempty"`
 	Default bool   `json:"default,omitempty"`
+	// Forced is a subtitle a player shows by itself for the language it is in
+	// (signs, a line in another language): katalog-manager's isforced
+	// (migration 038). False on a catalog without the column.
+	Forced bool `json:"forced,omitempty"`
 }
 
 // Trailer mirrors chino-api's Trailer. site+externalId is enough for
