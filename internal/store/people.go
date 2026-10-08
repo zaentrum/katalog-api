@@ -218,7 +218,7 @@ func (s *Store) GetPerson(ctx context.Context, id string, limit int, langs []str
 
 	// One card per title, however many roles the person holds on it (a
 	// person credited as actor and director is one card with both roles).
-	rated, err := s.rated(ctx)
+	cols, _, err := s.itemSelect(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -234,7 +234,7 @@ func (s *Store) GetPerson(ctx context.Context, id string, limit int, langs []str
 		capped = "WHERE " + capped
 	}
 	rows, err := s.Pool.Query(ctx, `
-		SELECT `+itemColumns+ratingSelect(rated)+`, c.roles
+		SELECT `+cols+`, c.roles
 		FROM (
 			SELECT ip.item_id, array_agg(ip.role ORDER BY `+roleRank("$3", "ip.role")+`, ip.role) AS roles
 			FROM (SELECT DISTINCT item_id, role::text AS role

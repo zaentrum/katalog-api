@@ -170,6 +170,94 @@ func TestTheFileOfACoveredEpisodeIsItsHolders(t *testing.T) {
 	}
 }
 
+// coverOf is what an item says of the file it shares: "covered by h",
+// "covers a b, to n", or "-".
+func coverOf(it Item) string {
+	var out []string
+	if it.CoveredBy != "" {
+		out = append(out, "covered by "+it.CoveredBy)
+	}
+	if it.Covers != nil {
+		out = append(out, "covers "+strings.Join(it.Covers, " "))
+	}
+	if it.EpisodeEnd != nil {
+		out = append(out, fmt.Sprintf("to %d", *it.EpisodeEnd))
+	}
+	if len(out) == 0 {
+		return "-"
+	}
+	return strings.Join(out, ", ")
+}
+
+// coversOf is each item's id and what it says of the file it shares, in their
+// order.
+func coversOf(items []Item) string {
+	var out []string
+	for _, it := range items {
+		out = append(out, it.ID+": "+coverOf(it))
+	}
+	return strings.Join(out, "; ")
+}
+
+// The episodes of sharedFiles' show in episode order, and what each says of
+// the file it shares.
+const sharedEpisodes = "e1: -; h2: covers z3 a4, to 4; z3: covered by h2; a4: covered by h2; " +
+	"h6: covers c7, to 7; c7: covered by h6"
+
+// Every read of an item says which file it shares: a covered episode names its
+// holder; the holder lists the others its file holds, in episode order (not
+// as their ids sort), and the number of the last of them; an episode with a
+// file of its own, a film and a series say nothing. So does an item by id,
+// with its associations or without, a series' episodes, the lists of every
+// type, and a person's filmography.
+func TestAnEpisodeSaysWhichFileItShares(t *testing.T) {
+	st, db := sharedFiles(t)
+	for _, id := range []string{"e1", "h2", "z3", "m1"} {
+		credit(t, db, id, "Ada Example", "actor")
+	}
+	ctx := context.Background()
+	want := map[string]string{
+		"e1": "-", "h2": "covers z3 a4, to 4", "z3": "covered by h2", "a4": "covered by h2",
+		"h6": "covers c7, to 7", "c7": "covered by h6", "s1": "-", "m1": "-",
+	}
+	for id, w := range want {
+		it, err := st.GetItem(ctx, id)
+		if err != nil || coverOf(it) != w {
+			t.Errorf("GetItem(%s): %s %v, want %s", id, coverOf(it), err, w)
+		}
+		it, err = st.GetItemWithIncludes(ctx, id, IncludeOpts{Genres: true, People: true, Subtitles: true, Segments: true})
+		if err != nil || coverOf(it) != w {
+			t.Errorf("GetItemWithIncludes(%s): %s %v, want %s", id, coverOf(it), err, w)
+		}
+	}
+	eps, err := st.ListEpisodesBySeries(ctx, "s1")
+	if got := coversOf(eps); err != nil || got != sharedEpisodes {
+		t.Errorf("the episodes of s1:\n got %s %v\nwant %s", got, err, sharedEpisodes)
+	}
+	res, err := st.ListItems(ctx, ListOpts{Type: "episode"})
+	if got := coversOf(res.Items); err != nil || got != sharedEpisodes {
+		t.Errorf("the list of episodes:\n got %s %v\nwant %s", got, err, sharedEpisodes)
+	}
+	res, err = st.ListItems(ctx, ListOpts{Limit: 200})
+	if err != nil || len(res.Items) != len(want) {
+		t.Fatalf("the list of everything: %d items %v, want %d", len(res.Items), err, len(want))
+	}
+	for _, it := range res.Items {
+		if coverOf(it) != want[it.ID] {
+			t.Errorf("the list of everything, %s: %s, want %s", it.ID, coverOf(it), want[it.ID])
+		}
+	}
+	pd, err := st.GetPerson(ctx, "ada-example", 100, nil)
+	if err != nil || pd == nil || len(pd.Items) != 4 {
+		t.Fatalf("Ada's filmography: %+v %v, want e1, h2, z3 and m1", pd, err)
+	}
+	for _, it := range pd.Items {
+		if coverOf(it) != want[it.ID] {
+			t.Errorf("Ada's filmography, %s: %s, want %s", it.ID, coverOf(it), want[it.ID])
+		}
+	}
+}
+
 // A covered episode is packaged when its holder is, whatever it holds itself:
 // the holder's package is its. Before migration 045, the episodes a file holds
 // after its first are not; then the covered episodes of a packaged holder are,
@@ -203,8 +291,9 @@ func TestACoveredEpisodeIsPackagedWhenItsHolderIs(t *testing.T) {
 
 // On a catalog without migration 045 no episode is covered: each is answered
 // its own, as before, and the episodes a file holds after its first have
-// nothing to play. Once 045 has run and the file's episodes are linked, the
-// covered ones play their holder's, without a restart.
+// nothing to play; no item says it shares a file. Once 045 has run and the
+// file's episodes are linked, the covered ones play their holder's and every
+// read says so, without a restart.
 func TestSharedFilesOnACatalogOlderThan045(t *testing.T) {
 	st, db := showWithSharedFiles(t)
 	ctx := context.Background()
@@ -216,6 +305,10 @@ func TestSharedFilesOnACatalogOlderThan045(t *testing.T) {
 		}
 		if a, err := st.PrimaryAsset(ctx, "z3"); !errors.Is(err, ErrNotFound) {
 			t.Errorf("before 045, call %d, the file of z3: %+v %v, want not found", i, a, err)
+		}
+		eps, err := st.ListEpisodesBySeries(ctx, "s1")
+		if want := "e1: -; h2: -; z3: -; a4: -; h6: -; c7: -"; err != nil || coversOf(eps) != want {
+			t.Errorf("before 045, call %d, the episodes of s1: %s %v, want %s", i, coversOf(eps), err, want)
 		}
 	}
 
@@ -230,6 +323,9 @@ func TestSharedFilesOnACatalogOlderThan045(t *testing.T) {
 	}
 	if a, err := st.PrimaryAsset(ctx, "z3"); err != nil || a.Path != lib+"/media/shows/A Show/A Show S01E02-E04.mkv" {
 		t.Errorf("after 045, the file of z3: %+v %v, want h2's", a, err)
+	}
+	if eps, err := st.ListEpisodesBySeries(ctx, "s1"); err != nil || coversOf(eps) != sharedEpisodes {
+		t.Errorf("after 045, the episodes of s1:\n got %s %v\nwant %s", coversOf(eps), err, sharedEpisodes)
 	}
 }
 
@@ -253,6 +349,11 @@ func TestSharedFilesWhenTheRoleMayNotReadTheColumn(t *testing.T) {
 	if ids, err := st.PackagedIDs(ctx); err != nil || strings.Join(ids, " ") != "e1 h2 m1" {
 		t.Errorf("without the column, the packaged ids: %q %v, want e1 h2 m1", ids, err)
 	}
+	for _, id := range []string{"h2", "z3"} {
+		if it, err := st.GetItem(ctx, id); err != nil || coverOf(it) != "-" {
+			t.Errorf("without the column, %s: %s %v, want nothing of a file", id, coverOf(it), err)
+		}
+	}
 
 	db.Exec(t, `GRANT SELECT ON com_nalet_katalog_items TO `+role)
 	if got, w := playbackOf(t, st, "z3"), coveredAnswer(playsH2, "h2", "z3"); got != w {
@@ -263,5 +364,8 @@ func TestSharedFilesWhenTheRoleMayNotReadTheColumn(t *testing.T) {
 	}
 	if ids, err := st.PackagedIDs(ctx); err != nil || strings.Join(ids, " ") != "a4 e1 h2 m1 z3" {
 		t.Errorf("with the column, the packaged ids: %q %v, want a4 e1 h2 m1 z3", ids, err)
+	}
+	if eps, err := st.ListEpisodesBySeries(ctx, "s1"); err != nil || coversOf(eps) != sharedEpisodes {
+		t.Errorf("with the column, the episodes of s1:\n got %s %v\nwant %s", coversOf(eps), err, sharedEpisodes)
 	}
 }

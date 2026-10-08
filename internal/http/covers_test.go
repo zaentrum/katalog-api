@@ -1,7 +1,11 @@
 package http
 
 import (
+	"reflect"
+	"sort"
 	"testing"
+
+	"github.com/go-chi/chi/v5"
 
 	"github.com/zaentrum/katalog-api/internal/store"
 	"github.com/zaentrum/katalog-api/internal/store/storetest"
@@ -17,19 +21,19 @@ const (
 	opener    = "7d6c5b4a-3e2f-4a1b-8c0d-9e8f7a6b5c4d"
 )
 
-// sharedFinale is a catalog with migrations 040 and 045 whose show holds an
-// opener with a file of its own and a finale in two parts, one file packaged
-// into the library for its first part, the holder, which covers the second.
-func sharedFinale(t *testing.T) *storetest.DB {
+// finaleCatalog is a catalog with migration 040 whose show holds an opener with
+// a file of its own and a finale in two parts, one file packaged into the
+// library for its first part; linked, it has migration 045 too, and the first
+// part, the holder, covers the second.
+func finaleCatalog(t *testing.T, linked bool) *storetest.DB {
 	t.Helper()
 	db := storetest.Open(t)
 	db.Migrate040(t)
-	db.Migrate045(t)
-	db.Exec(t, `INSERT INTO com_nalet_katalog_items (id, type, title, parent_id, seasonnumber, episodenumber, coveredby) VALUES
-		($1, 'series',  'A Show',             NULL, NULL, NULL, NULL),
-		($2, 'episode', 'Pilot',              $1,   1,    1,    NULL),
-		($3, 'episode', 'Finale, Part One',   $1,   1,    9,    NULL),
-		($4, 'episode', 'Finale, Part Two',   $1,   1,    10,   $3)`, show, opener, finale, finaleTwo)
+	db.Exec(t, `INSERT INTO com_nalet_katalog_items (id, type, title, parent_id, seasonnumber, episodenumber) VALUES
+		($1, 'series',  'A Show',           NULL, NULL, NULL),
+		($2, 'episode', 'Pilot',            $1,   1,    1),
+		($3, 'episode', 'Finale, Part One', $1,   1,    9),
+		($4, 'episode', 'Finale, Part Two', $1,   1,    10)`, show, opener, finale, finaleTwo)
 	dir := "/var/lib/katalog/series/3f/" + show + "/episodes/" + finale
 	db.Exec(t, `INSERT INTO com_nalet_katalog_itemversions (id, item_id, state, packageid, dir, completedat)
 		VALUES ('5b4a3c2d-1e0f-4a9b-8c7d-6e5f4a3b2c1d', $1, 'complete', 'p1', $2, '2026-10-08 09:00:00+00')`,
@@ -39,6 +43,10 @@ func sharedFinale(t *testing.T) *storetest.DB {
 		('a2', $1, $2, false, 'packaged', NULL, '5b4a3c2d-1e0f-4a9b-8c7d-6e5f4a3b2c1d'),
 		('a3', $3, '/var/lib/katalog/.work/incoming/A Show S01E01.mkv', true, 'primary', 's2', NULL)`,
 		finale, dir+"/versions/5b4a3c2d-1e0f-4a9b-8c7d-6e5f4a3b2c1d/package.json", opener)
+	if linked {
+		db.Migrate045(t)
+		db.Exec(t, `UPDATE com_nalet_katalog_items SET coveredby = $1 WHERE id = $2`, finale, finaleTwo)
+	}
 	return db
 }
 
@@ -48,7 +56,7 @@ func sharedFinale(t *testing.T) *storetest.DB {
 // holder's among them; /asset answers the holder's file; and the packaged ids
 // list it beside its holder.
 func TestACoveredEpisodesPlaybackOnTheWire(t *testing.T) {
-	h := router(t, &store.Store{Pool: sharedFinale(t).Pool})
+	h := router(t, &store.Store{Pool: finaleCatalog(t, true).Pool})
 	const pkg = `"package":{"versionId":"5b4a3c2d-1e0f-4a9b-8c7d-6e5f4a3b2c1d",` +
 		`"dir":"/var/lib/katalog/series/3f/` + show + `/episodes/` + finale + `/versions/5b4a3c2d-1e0f-4a9b-8c7d-6e5f4a3b2c1d",` +
 		`"record":"package.json","completedAt":"2026-10-08T09:00:00Z"},"previous":[],` +
@@ -64,6 +72,72 @@ func TestACoveredEpisodesPlaybackOnTheWire(t *testing.T) {
 		t.Logf("GET %s\n%s", path, body)
 		if code != 200 || body != want {
 			t.Errorf("GET %s:\n got %d %s\nwant 200 %s", path, code, body, want)
+		}
+	}
+}
+
+// fileFields is what an item on the wire says of the file it shares: those of
+// coveredBy, covers and episodeEnd it sends.
+func fileFields(item map[string]any) map[string]any {
+	out := map[string]any{}
+	for _, k := range []string{"coveredBy", "covers", "episodeEnd"} {
+		if v, ok := item[k]; ok {
+			out[k] = v
+		}
+	}
+	return out
+}
+
+// An episode on the wire says which file it shares, as the product BFFs read
+// it: on the item by id, with its associations or without, a series' episodes
+// and the list of episodes. A covered episode sends
+// coveredBy, the holder's id; the holder sends covers, the ids of the other
+// episodes its file holds in episode order, and episodeEnd, the number of the
+// last of them. An episode with a file of its own sends none of them, and on a
+// catalog without migration 045 no episode does: each sends what it sent
+// before, key for key.
+func TestSharedFilesOnTheWire(t *testing.T) {
+	before := []string{"episode_number", "id", "parent_id", "season_number", "title", "type"}
+	for _, linked := range []bool{true, false} {
+		db := finaleCatalog(t, linked)
+		hd := &ItemsHandler{Store: &store.Store{Pool: db.Pool}}
+		r := chi.NewRouter()
+		r.Get("/items/{id}", hd.Get)
+		r.Get("/series/{id}/episodes", hd.SeriesEpisodes)
+		r.Get("/episodes", hd.listByType("episode"))
+
+		want := map[string]map[string]any{opener: {}, finale: {}, finaleTwo: {}}
+		if linked {
+			want[finale] = map[string]any{"covers": []any{finaleTwo}, "episodeEnd": 10.0}
+			want[finaleTwo] = map[string]any{"coveredBy": finale}
+		}
+		check := func(where, id string, item map[string]any) {
+			t.Helper()
+			wantKeys := append(keys(want[id]), before...)
+			sort.Strings(wantKeys)
+			if got := fileFields(item); !reflect.DeepEqual(got, want[id]) || !reflect.DeepEqual(keys(item), wantKeys) {
+				t.Errorf("045 %v, %s, %s: %v (keys %q), want %v (keys %q)", linked, where, id, got, keys(item), want[id], wantKeys)
+			}
+		}
+		for _, id := range []string{opener, finale, finaleTwo} {
+			for _, path := range []string{"/items/" + id, "/items/" + id + "?include=genres,cast,subtitles,extras,segments"} {
+				body, _ := get(t, r, path, nil)
+				check(path, id, body)
+			}
+		}
+		for _, path := range []string{"/series/" + show + "/episodes", "/episodes"} {
+			body, _ := get(t, r, path, nil)
+			items, _ := body["items"].([]any)
+			var ids []string
+			for _, it := range items {
+				item := it.(map[string]any)
+				id, _ := item["id"].(string)
+				ids = append(ids, id)
+				check(path, id, item)
+			}
+			if w := []string{opener, finale, finaleTwo}; !reflect.DeepEqual(ids, w) {
+				t.Errorf("045 %v, %s: %q, want %q in episode order", linked, path, ids, w)
+			}
 		}
 	}
 }

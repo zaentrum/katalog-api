@@ -21,6 +21,17 @@ type Item struct {
 	EpisodeNumber *int    `json:"episode_number,omitempty"`
 	ParentID      string  `json:"parent_id,omitempty"`
 
+	// CoveredBy, Covers and EpisodeEnd are set on the episodes one file holds
+	// (katalog-manager's migration 045, covers.go), named as the library
+	// names them. A covered episode names its holder, the first episode the
+	// file holds, whose file it plays; the holder lists the other episodes
+	// the file holds, in episode order, and EpisodeEnd is the number of the
+	// last of them. Each is omitted on every other item, and on a catalog
+	// without 045.
+	CoveredBy  string   `json:"coveredBy,omitempty"`
+	Covers     []string `json:"covers,omitempty"`
+	EpisodeEnd *int     `json:"episodeEnd,omitempty"`
+
 	// MinAge is the age a viewer must be to be served the item: an admin's
 	// rating of it, else (an episode) its series' rating, else the minimum
 	// age its certification means; nil when nothing rates it. A pointer, so

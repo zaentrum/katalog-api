@@ -26,6 +26,21 @@ func (s *Store) covering(ctx context.Context) (bool, error) {
 	return has[coveredColumn], err
 }
 
+// coverSelect is what every item query reads of the file the item i shares,
+// after its rating (scanItem): the holder it is covered by, the episodes it
+// covers in episode order, and the highest of their numbers, the last episode
+// its file holds. NULLs on a catalog that covers nothing (covering). The index
+// 045 adds on the column finds the episodes a holder covers.
+func coverSelect(covering bool) string {
+	if !covering {
+		return `, NULL::text, NULL::text[], NULL::int`
+	}
+	return `, NULLIF(i.coveredby, '')::text,
+		ARRAY(SELECT cov.id::text FROM com_nalet_katalog_items cov WHERE cov.coveredby = i.id
+		      ORDER BY cov.seasonnumber NULLS LAST, cov.episodenumber NULLS LAST, cov.id),
+		(SELECT max(cov.episodenumber) FROM com_nalet_katalog_items cov WHERE cov.coveredby = i.id)::int`
+}
+
 // holderOf is the SQL of the item whose file plays for the item id, an SQL
 // expression (a parameter): the holder of a covered episode, else the item
 // itself; id itself on a catalog that covers nothing (covering).

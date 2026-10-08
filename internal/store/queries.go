@@ -86,7 +86,7 @@ func (s *Store) ListItems(ctx context.Context, opts ListOpts) (ListResult, error
 		wheres = append(wheres, capped)
 	}
 
-	rated, err := s.rated(ctx)
+	cols, rated, err := s.itemSelect(ctx)
 	if err != nil {
 		return ListResult{}, err
 	}
@@ -151,7 +151,7 @@ func (s *Store) ListItems(ctx context.Context, opts ListOpts) (ListResult, error
 	// is already unique — no DISTINCT needed. This also lets ORDER BY
 	// reference columns outside the SELECT list, which is what the
 	// "newest" sort (`i.createdat`) requires.
-	listSQL := `SELECT ` + itemColumns + ratingSelect(rated) + `
+	listSQL := `SELECT ` + cols + `
 		` + from + " " + where + `
 		ORDER BY ` + orderBy + `
 		LIMIT ` + add(opts.Limit) + ` OFFSET ` + add(opts.Offset)
@@ -250,7 +250,7 @@ func (s *Store) ListSimilar(ctx context.Context, itemID string, limit int) ([]It
 		return []Item{}, nil
 	}
 
-	rated, err := s.rated(ctx)
+	cols, _, err := s.itemSelect(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -288,7 +288,7 @@ func (s *Store) ListSimilar(ctx context.Context, itemID string, limit int) ([]It
 			  AND ip.item_id <> $1
 			GROUP BY ip.item_id
 		)
-		SELECT ` + itemColumns + ratingSelect(rated) + `
+		SELECT ` + cols + `
 		FROM com_nalet_katalog_items i
 		LEFT JOIN com_nalet_katalog_items par ON par.id = i.parent_id
 		LEFT JOIN genre_scores g  ON g.item_id = i.id
@@ -365,7 +365,7 @@ func (s *Store) GetItem(ctx context.Context, id string) (Item, error) {
 	if s == nil || s.Pool == nil {
 		return Item{}, ErrNoPool
 	}
-	rated, err := s.rated(ctx)
+	cols, _, err := s.itemSelect(ctx)
 	if err != nil {
 		return Item{}, err
 	}
@@ -377,7 +377,7 @@ func (s *Store) GetItem(ctx context.Context, id string) (Item, error) {
 	if err != nil {
 		return Item{}, err
 	}
-	q := `SELECT ` + itemColumns + ratingSelect(rated) + ` ` + fromItems + ` WHERE i.id = $1`
+	q := `SELECT ` + cols + ` ` + fromItems + ` WHERE i.id = $1`
 	if capped != "" {
 		q += ` AND ` + capped
 	}
@@ -489,7 +489,7 @@ func (s *Store) ListEpisodesBySeries(ctx context.Context, seriesID string) ([]It
 	} else if !ok {
 		return nil, ErrNotFound
 	}
-	rated, err := s.rated(ctx)
+	cols, _, err := s.itemSelect(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -504,7 +504,7 @@ func (s *Store) ListEpisodesBySeries(ctx context.Context, seriesID string) ([]It
 	if capped != "" {
 		capped = " AND " + capped
 	}
-	rows, err := s.Pool.Query(ctx, `SELECT `+itemColumns+ratingSelect(rated)+` `+fromItems+`
+	rows, err := s.Pool.Query(ctx, `SELECT `+cols+` `+fromItems+`
 		WHERE i.type = 'episode' AND i.parent_id = $1`+capped+`
 		ORDER BY i.seasonnumber NULLS LAST, i.episodenumber NULLS LAST, i.id`, args...)
 	if err != nil {
@@ -815,11 +815,11 @@ func (s *Store) segmentSummaryFor(ctx context.Context, itemID string) (*SegSumma
 // Scan helpers.
 // =============================================================================
 
-// scanItem reads the 12-column item row and its rating into an Item, COALESCE-ing the
-// nullable text columns so the JSON wire never carries `null` for a
-// missing description / tagline / parent (it carries the field-omitted
-// `omitempty` form instead). Year / rating / season / episode stay as
-// pointers — null is meaningful there ("year unknown" vs "year=0").
+// scanItem reads the 12-column item row, its rating and the file it shares
+// into an Item, COALESCE-ing the nullable text columns so the JSON wire never
+// carries `null` for a missing description / tagline / parent (it carries the
+// field-omitted `omitempty` form instead). Year / rating / season / episode
+// stay as pointers — null is meaningful there ("year unknown" vs "year=0").
 //
 // Works with both pgx.Row (single-row scan) and pgx.Rows (multi-row);
 // the interface is the common Scan(dest ...any) error method.
@@ -828,12 +828,28 @@ type rowScanner interface {
 }
 
 // itemColumns are the twelve columns of an item every item query selects
-// first, of the item i, then its rating (ratingSelect).
+// first, of the item i, then its rating (ratingSelect) and the file it shares
+// (coverSelect): itemSelect.
 const itemColumns = `i.id, i.type, i.title, i.sorttitle, i.year, i.rating, i.description, i.tagline,
 	i.durationms, i.seasonnumber, i.episodenumber, i.parent_id`
 
-// extra are destinations for columns a query selects after the twelve and the
-// rating's three.
+// itemSelect is what an item query selects of the items i (fromItems), in the
+// order scanItem reads it: the twelve columns, the item's rating and the file
+// it shares, as far as the catalog has them and this role may read them. rated
+// reports whether the catalog rates its titles (ratingSelect).
+func (s *Store) itemSelect(ctx context.Context) (cols string, rated bool, err error) {
+	if rated, err = s.rated(ctx); err != nil {
+		return "", false, err
+	}
+	covering, err := s.covering(ctx)
+	if err != nil {
+		return "", false, err
+	}
+	return itemColumns + ratingSelect(rated) + coverSelect(covering), rated, nil
+}
+
+// extra are destinations for columns a query selects after the twelve, the
+// rating's three and the shared file's three.
 func scanItem(r rowScanner, extra ...any) (Item, error) {
 	var (
 		it            Item
@@ -848,6 +864,7 @@ func scanItem(r rowScanner, extra ...any) (Item, error) {
 		parentID      *string
 		certification *string
 		certCountry   *string
+		coveredBy     *string
 	)
 	if err := r.Scan(append([]any{
 		&it.ID, &it.Type, &it.Title,
@@ -855,11 +872,18 @@ func scanItem(r rowScanner, extra ...any) (Item, error) {
 		&description, &tagline, &durationMs,
 		&seasonNum, &episodeNum, &parentID,
 		&it.MinAge, &certification, &certCountry,
+		&coveredBy, &it.Covers, &it.EpisodeEnd,
 	}, extra...)...); err != nil {
 		return Item{}, err
 	}
 	if certification != nil && certCountry != nil {
 		it.Certification, it.CertificationCountry = *certification, *certCountry
+	}
+	if coveredBy != nil {
+		it.CoveredBy = *coveredBy
+	}
+	if len(it.Covers) == 0 {
+		it.Covers = nil // the file covers no other episode, or the catalog does not say
 	}
 	if sortTitle != nil {
 		it.SortTitle = *sortTitle
