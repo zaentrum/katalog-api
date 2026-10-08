@@ -45,7 +45,8 @@ func sharedFinale(t *testing.T) *storetest.DB {
 // A covered episode's playback lookups on the wire, as the stream services ask
 // them, without a bearer: /playback answers the holder's package and original
 // and names the holder in coveredBy, which no other item's answer carries, the
-// holder's among them; /asset answers the holder's file.
+// holder's among them; /asset answers the holder's file; and the packaged ids
+// list it beside its holder.
 func TestACoveredEpisodesPlaybackOnTheWire(t *testing.T) {
 	h := router(t, &store.Store{Pool: sharedFinale(t).Pool})
 	const pkg = `"package":{"versionId":"5b4a3c2d-1e0f-4a9b-8c7d-6e5f4a3b2c1d",` +
@@ -57,6 +58,7 @@ func TestACoveredEpisodesPlaybackOnTheWire(t *testing.T) {
 		"/api/v1/items/" + finale + "/playback":    `{"itemId":"` + finale + `","type":"episode",` + pkg,
 		"/api/v1/items/" + finaleTwo + "/asset":    `{"path":"/var/lib/katalog/.work/incoming/A Show S01E09-E10.mkv","isPrimary":true}`,
 		"/api/v1/items/" + opener + "/asset":       `{"path":"/var/lib/katalog/.work/incoming/A Show S01E01.mkv","isPrimary":true}`,
+		"/api/v1/packaged-ids":                     `{"ids":["` + finaleTwo + `","` + finale + `"]}`,
 	} {
 		code, body := serve(h, path, nil)
 		t.Logf("GET %s\n%s", path, body)

@@ -170,6 +170,37 @@ func TestTheFileOfACoveredEpisodeIsItsHolders(t *testing.T) {
 	}
 }
 
+// A covered episode is packaged when its holder is, whatever it holds itself:
+// the holder's package is its. Before migration 045, the episodes a file holds
+// after its first are not; then the covered episodes of a packaged holder are,
+// in id order with the rest, and those of a holder packaged later join; when
+// the holder's package goes, they go with it.
+func TestACoveredEpisodeIsPackagedWhenItsHolderIs(t *testing.T) {
+	st, db := showWithSharedFiles(t)
+	ctx := context.Background()
+	check := func(when string, want ...string) {
+		t.Helper()
+		if ids, err := st.PackagedIDs(ctx); err != nil || strings.Join(ids, " ") != strings.Join(want, " ") {
+			t.Errorf("%s: %q %v, want %q", when, ids, err, want)
+		}
+	}
+	check("before 045", "e1", "h2", "m1")
+	db.Migrate045(t) // while the service is up
+	cover(t, db, "h2", "z3", "a4")
+	cover(t, db, "h6", "c7")
+	check("after 045", "a4", "e1", "h2", "m1", "z3")
+
+	// h6 is packaged into the library.
+	db.Exec(t, `INSERT INTO com_nalet_katalog_playbackassets (id, item_id, path, isprimary, kind, versionid)
+		VALUES ('p-h6', 'h6', $1, false, 'packaged', 'v6')`, lib+"/series/s1/s1/episodes/h6/versions/v6/package.json")
+	check("h6 packaged", "a4", "c7", "e1", "h2", "h6", "m1", "z3")
+
+	// h2's package goes; z3 holds a stray package of its own.
+	db.Exec(t, `DELETE FROM com_nalet_katalog_playbackassets WHERE id = 'p-h2'`)
+	addAsset(t, db, "p-z3", "z3", lib+"/packages/shows/z3/z3/manifest.json", false, "packaged")
+	check("h2's package gone", "c7", "e1", "h6", "m1")
+}
+
 // On a catalog without migration 045 no episode is covered: each is answered
 // its own, as before, and the episodes a file holds after its first have
 // nothing to play. Once 045 has run and the file's episodes are linked, the
@@ -219,6 +250,9 @@ func TestSharedFilesWhenTheRoleMayNotReadTheColumn(t *testing.T) {
 	if a, err := st.PrimaryAsset(ctx, "z3"); !errors.Is(err, ErrNotFound) {
 		t.Errorf("without the column, the file of z3: %+v %v, want not found", a, err)
 	}
+	if ids, err := st.PackagedIDs(ctx); err != nil || strings.Join(ids, " ") != "e1 h2 m1" {
+		t.Errorf("without the column, the packaged ids: %q %v, want e1 h2 m1", ids, err)
+	}
 
 	db.Exec(t, `GRANT SELECT ON com_nalet_katalog_items TO `+role)
 	if got, w := playbackOf(t, st, "z3"), coveredAnswer(playsH2, "h2", "z3"); got != w {
@@ -226,5 +260,8 @@ func TestSharedFilesWhenTheRoleMayNotReadTheColumn(t *testing.T) {
 	}
 	if a, err := st.PrimaryAsset(ctx, "z3"); err != nil || a.Path != lib+"/media/shows/A Show/A Show S01E02-E04.mkv" {
 		t.Errorf("with the column, the file of z3: %+v %v, want h2's", a, err)
+	}
+	if ids, err := st.PackagedIDs(ctx); err != nil || strings.Join(ids, " ") != "a4 e1 h2 m1 z3" {
+		t.Errorf("with the column, the packaged ids: %q %v, want a4 e1 h2 m1 z3", ids, err)
 	}
 }
