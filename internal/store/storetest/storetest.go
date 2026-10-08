@@ -8,10 +8,10 @@
 // Each test gets a schema of its own, dropped when the test ends. It holds the
 // catalog tables this service reads as a catalog older than migration 030 has
 // them, column for column as katalog-manager creates them (lowercase, as
-// Postgres folded the CAP DDL). Migrate030, Migrate032, Migrate036, Migrate039
-// and Migrate040 bring the schema forward, so a test can prove a query works
-// on a catalog before and after a migration — the catalog is katalog-manager's,
-// and it migrates while this service runs.
+// Postgres folded the CAP DDL). Migrate030, Migrate032, Migrate036, Migrate038,
+// Migrate039, Migrate040 and Migrate045 bring the schema forward, so a test can
+// prove a query works on a catalog before and after a migration — the catalog
+// is katalog-manager's, and it migrates while this service runs.
 package storetest
 
 import (
@@ -118,6 +118,13 @@ func (db *DB) Migrate040(t testing.TB) {
 	t.Helper()
 	db.Exec(t, migration039)
 	db.Exec(t, migration040)
+}
+
+// Migrate045 adds what migration 045 adds: on an episode that one file holds
+// with others, the holder it is covered by.
+func (db *DB) Migrate045(t testing.TB) {
+	t.Helper()
+	db.Exec(t, migration045)
 }
 
 // Exec runs one statement (or several, without arguments) in the schema and
@@ -418,4 +425,16 @@ ALTER TABLE com_nalet_katalog_itemextras
   ADD COLUMN IF NOT EXISTS sourcedeletedat TIMESTAMPTZ;
 DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname='cloud_katalog_ro') THEN
   GRANT SELECT ON com_nalet_katalog_itemsources, com_nalet_katalog_itemversions TO cloud_katalog_ro; END IF; END $$;
+`
+
+// migration045 is what katalog-manager's migration 045 adds, as the library
+// contract defines it: one file that holds several episodes belongs to the
+// first of them, its holder, and every other episode it holds (one it covers)
+// names the holder's item id; NULL on every other item. The index finds the
+// episodes a holder covers. A role granted SELECT on the items may read a
+// column added to them, so 045 grants nothing.
+const migration045 = `
+ALTER TABLE com_nalet_katalog_items
+  ADD COLUMN IF NOT EXISTS coveredby VARCHAR(36);
+CREATE INDEX IF NOT EXISTS idx_items_coveredby ON com_nalet_katalog_items (coveredby);
 `
