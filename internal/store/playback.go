@@ -38,12 +38,26 @@ const (
 // one superseded last first: a session started on one of them is served from
 // it until it ends. Original is the file the item was taken in from, while
 // there is one; nil once it was retired, and for an item without one.
+//
+// A covered episode plays its holder's file (covers.go): CoveredBy names the
+// holder, and its package, previous versions and original are the holder's.
+// CoveredBy is omitted for every other item.
 type Playback struct {
-	ItemID   string       `json:"itemId"`
-	Type     string       `json:"type"`
-	Package  *PackageRef  `json:"package"`
-	Previous []PackageRef `json:"previous"`
-	Original *Original    `json:"original"`
+	ItemID    string       `json:"itemId"`
+	Type      string       `json:"type"`
+	CoveredBy string       `json:"coveredBy,omitempty"`
+	Package   *PackageRef  `json:"package"`
+	Previous  []PackageRef `json:"previous"`
+	Original  *Original    `json:"original"`
+}
+
+// holder is the item whose file p plays: the holder of a covered episode,
+// else the item itself.
+func (p *Playback) holder() string {
+	if p.CoveredBy != "" {
+		return p.CoveredBy
+	}
+	return p.ItemID
 }
 
 // PackageRef is one package's folder (Dir) and the record in it the stream
@@ -75,7 +89,9 @@ var versionColumns = []string{"id", "item_id", "state", "dir", "completedat", "s
 
 // Playback returns where the item itemID's package and original are, or
 // ErrNotFound when the catalog holds no such item. It applies no rating cap:
-// the stream services ask it for what a stream token already authorizes.
+// the stream services ask it for what a stream token already authorizes. A
+// covered episode is answered its holder's package, previous versions and
+// original (covers.go), whatever it holds itself.
 //
 // On a catalog without migration 040, or with a role that may not read the
 // versions yet (a table created after the read-only role was granted its
@@ -91,39 +107,53 @@ func (s *Store) Playback(ctx context.Context, itemID string) (Playback, error) {
 	if err != nil {
 		return Playback{}, err
 	}
+	covering, err := s.covering(ctx)
+	if err != nil {
+		return Playback{}, err
+	}
 	col := func(name string) string {
 		if has[name] {
 			return "a." + name
 		}
 		return "NULL::text"
 	}
+	// The assets read are those of the item whose file plays: a covered
+	// episode's holder's, any other item's own.
+	holder, of := "NULL::text", "i.id"
+	if covering {
+		holder = "NULLIF(i.coveredby, '')"
+		of = "COALESCE(" + holder + ", i.id)"
+	}
 	p := Playback{Previous: []PackageRef{}}
-	var origPath, origSource, pkgPath, pkgVersion *string
+	var coveredBy, origPath, origSource, pkgPath, pkgVersion *string
 	// The original is the item's primary asset, marked primary and of kind
 	// primary (a row without a kind is one); its packaged asset is the one
 	// katalog-manager writes when it records the item's package (it keeps
 	// one).
 	err = s.Pool.QueryRow(ctx, `
-		SELECT i.id, i.type, o.path, o.sourceid, k.path, k.versionid
+		SELECT i.id, i.type, `+holder+`, o.path, o.sourceid, k.path, k.versionid
 		FROM com_nalet_katalog_items i
 		LEFT JOIN LATERAL (
 			SELECT a.path, `+col("sourceid")+` AS sourceid
 			FROM com_nalet_katalog_playbackassets a
-			WHERE a.item_id = i.id AND a.isprimary AND COALESCE(a.kind, 'primary') = 'primary'
+			WHERE a.item_id = `+of+` AND a.isprimary AND COALESCE(a.kind, 'primary') = 'primary'
 			ORDER BY a.path LIMIT 1
 		) o ON true
 		LEFT JOIN LATERAL (
 			SELECT a.path, `+col("versionid")+` AS versionid
 			FROM com_nalet_katalog_playbackassets a
-			WHERE a.item_id = i.id AND a.kind = 'packaged'
+			WHERE a.item_id = `+of+` AND a.kind = 'packaged'
 			ORDER BY a.path LIMIT 1
 		) k ON true
-		WHERE i.id = $1`, itemID).Scan(&p.ItemID, &p.Type, &origPath, &origSource, &pkgPath, &pkgVersion)
+		WHERE i.id = $1`, itemID).Scan(&p.ItemID, &p.Type, &coveredBy, &origPath, &origSource, &pkgPath, &pkgVersion)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Playback{}, ErrNotFound
 	}
 	if err != nil {
 		return Playback{}, fmt.Errorf("playback of %s: %w", itemID, err)
+	}
+	if coveredBy != nil {
+		p.CoveredBy = *coveredBy
 	}
 	if origPath != nil {
 		p.Original = &Original{Path: *origPath, SourceID: origSource}
@@ -140,11 +170,12 @@ func (s *Store) Playback(ctx context.Context, itemID string) (Playback, error) {
 	return p, nil
 }
 
-// versionsOf sets p's package to the item's complete version and its previous
-// ones to its superseded versions that are not removed, the one superseded
-// last first (by the catalog's clock, which orders them as they were current;
-// a version's completedat is its packager's), when the catalog has versions
-// and this role may read them. A version without a folder is none to play.
+// versionsOf sets p's package to the complete version of the item whose file
+// p plays (p.holder) and its previous ones to that item's superseded versions
+// that are not removed, the one superseded last first (by the catalog's clock,
+// which orders them as they were current; a version's completedat is its
+// packager's), when the catalog has versions and this role may read them. A
+// version without a folder is none to play.
 func (s *Store) versionsOf(ctx context.Context, p *Playback) error {
 	has, err := s.columns(ctx, "com_nalet_katalog_itemversions", versionColumns...)
 	if err != nil {
@@ -159,9 +190,9 @@ func (s *Store) versionsOf(ctx context.Context, p *Playback) error {
 		WHERE item_id = $1 AND dir IS NOT NULL
 		  AND (state = 'complete' OR (state = 'superseded' AND removedat IS NULL))
 		ORDER BY state = 'complete' DESC, supersededat DESC NULLS LAST, completedat DESC NULLS LAST, id`,
-		p.ItemID)
+		p.holder())
 	if err != nil {
-		return fmt.Errorf("versions of %s: %w", p.ItemID, err)
+		return fmt.Errorf("versions of %s: %w", p.holder(), err)
 	}
 	defer rows.Close()
 	for rows.Next() {

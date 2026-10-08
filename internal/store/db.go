@@ -100,16 +100,22 @@ func (s *Store) SubtitleAsset(ctx context.Context, subID string) (SubtitleAssetI
 // item's files by path. Both read only the item's files, assets of kind
 // primary (a row without a kind is one): never its package (kind packaged),
 // nor an original that was retired once its package was recorded (kind
-// original), whose file is gone. Returns ErrNotFound when the item has no such
-// asset.
+// original), whose file is gone. A covered episode's file is its holder's
+// (covers.go), whatever it holds itself. Returns ErrNotFound when the item has
+// no such asset.
 func (s *Store) PrimaryAsset(ctx context.Context, itemID string) (Asset, error) {
 	if s == nil || s.Pool == nil {
 		return Asset{}, ErrNoPool
 	}
+	covering, err := s.covering(ctx)
+	if err != nil {
+		return Asset{}, err
+	}
+	of := holderOf(covering, "$1")
 	var a Asset
-	err := s.Pool.QueryRow(ctx,
+	err = s.Pool.QueryRow(ctx,
 		`SELECT path, isprimary FROM com_nalet_katalog_playbackassets
-		 WHERE item_id = $1 AND isprimary = true AND COALESCE(kind, 'primary') = 'primary' LIMIT 1`,
+		 WHERE item_id = `+of+` AND isprimary = true AND COALESCE(kind, 'primary') = 'primary' LIMIT 1`,
 		itemID).Scan(&a.Path, &a.IsPrimary)
 	if err == nil {
 		return a, nil
@@ -119,7 +125,7 @@ func (s *Store) PrimaryAsset(ctx context.Context, itemID string) (Asset, error) 
 	}
 	err = s.Pool.QueryRow(ctx,
 		`SELECT path, isprimary FROM com_nalet_katalog_playbackassets
-		 WHERE item_id = $1 AND COALESCE(kind, 'primary') = 'primary' ORDER BY path LIMIT 1`,
+		 WHERE item_id = `+of+` AND COALESCE(kind, 'primary') = 'primary' ORDER BY path LIMIT 1`,
 		itemID).Scan(&a.Path, &a.IsPrimary)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Asset{}, ErrNotFound
