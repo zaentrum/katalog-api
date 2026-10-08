@@ -139,6 +139,9 @@ are:
 - `original` is the file the item was taken in from (its primary asset), with
   the source it is (`sourceId`, `null` when the catalog does not say); `null`
   once it was retired after packaging, or when there is none.
+- `coveredBy` is sent for an episode held in the file of another, its holder,
+  whose package, previous versions and original these are (see [Episodes that
+  share a file](#episodes-that-share-a-file)); omitted for every other item.
 - 404 for an id of no item.
 
 Before 040, and for an item packaged before the library, the package is the
@@ -181,6 +184,47 @@ Until then an item is answered from its packaged asset, which in the library
 is its version's `package.json`, so the same folder plays, with nothing
 previous.
 
+## Episodes that share a file
+
+One file may hold two episodes or more (a double-length finale). It is never
+split: it is packaged once, and plays for every episode it holds. The file
+belongs to its holder, the first episode it holds, as do its source, its
+versions and its package. Every other episode it holds, one it covers, keeps
+an item of its own (its title, its numbers) and no file, and names the holder
+(katalog-manager's migration 045, `com_nalet_katalog_items.coveredby`).
+
+- Every read of an item says which file it shares: the item by id, the lists,
+  a series' episodes and a person's filmography. A covered episode sends
+  `coveredBy`, its holder's id; the holder sends `covers`, the ids of the
+  other episodes its file holds, in episode order, and `episodeEnd`, the
+  number of the last of them. Each is omitted on every other item, which is
+  sent as before.
+
+```json
+{"items": [
+  {"id": "a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d", "type": "episode", "title": "Finale, Part One",
+   "season_number": 1, "episode_number": 9, "parent_id": "3f6b2c1e-8d4a-4e7f-9b0c-5a1d2e3f4a5b",
+   "covers": ["0c9d8e7f-6a5b-4c3d-9e1f-2a3b4c5d6e7f"], "episodeEnd": 10},
+  {"id": "0c9d8e7f-6a5b-4c3d-9e1f-2a3b4c5d6e7f", "type": "episode", "title": "Finale, Part Two",
+   "season_number": 1, "episode_number": 10, "parent_id": "3f6b2c1e-8d4a-4e7f-9b0c-5a1d2e3f4a5b",
+   "coveredBy": "a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d"}
+], "total": 2}
+```
+
+- A covered episode plays its holder's file, and is playable exactly when the
+  holder is: `/items/{id}/playback` answers it the holder's package, previous
+  versions and original, and names the holder in `coveredBy`;
+  `/items/{id}/asset` answers the holder's file; `/packaged-ids` lists it when
+  the holder has a package. Whatever a covered episode holds itself is not
+  read.
+- Its subtitles (`include=subtitles`) and its segments (`include=segments`,
+  `/items/{id}/segments`) are those of the file it plays, the holder's. The
+  rest of it (its title, its numbers, its credits, its genres) is its own.
+- The episodes a holder covers are found by 045's index on the column.
+
+On a catalog without 045, or with a role that may not read the column, no
+episode is covered and every answer is as before.
+
 ## Catalog schema
 
 The tables belong to katalog-manager, which migrates them while this service
@@ -216,7 +260,8 @@ go test ./...
 The store and handler tests that need PostgreSQL are skipped unless
 `KATALOG_API_TEST_DATABASE_URL` names a database in which they may create
 and drop schemas and roles (each test makes its own schema, with the catalog
-tables before and after the migrations it reads: 030, 032, 036, 039 and 040).
+tables before and after the migrations it reads: 030, 032, 036, 038, 039, 040
+and 045).
 A throwaway server:
 
 ```bash

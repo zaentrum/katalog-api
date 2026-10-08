@@ -61,7 +61,9 @@ paths:
           description: >
             Comma-separated associations to fold in: genres, people (alias
             cast), subtitles, trailers, extras, segments. Unknown tokens are
-            ignored.
+            ignored. The subtitles and the segments are of the file the item
+            plays: an episode covered by another's file (coveredBy) is served
+            its holder's.
           schema:
             type: string
           example: genres,people
@@ -124,8 +126,11 @@ paths:
         an item packaged before the library, the package is the folder of the
         item's packaged asset, read by its manifest.json, with no version and
         nothing previous; so too while the role may not read the versions.
-        It applies no rating cap and takes no bearer: the Service is
-        in-cluster only, as for the asset lookups.
+        An episode held in the file of another, its holder (katalog-manager's
+        migration 045), is answered the holder's package, previous versions
+        and original, and names the holder in coveredBy: it plays exactly
+        when the holder does. It applies no rating cap and takes no bearer:
+        the Service is in-cluster only, as for the asset lookups.
       parameters:
         - in: path
           name: id
@@ -170,9 +175,10 @@ paths:
       summary: Which movies and episodes have a package (internal)
       description: >
         For the stream services: the ids of the movies and episodes that have
-        a packaged asset, in id order, before the library and in it alike. It
-        takes no bearer: the Service is in-cluster only, as for the asset
-        lookups.
+        a packaged asset, in id order, before the library and in it alike. An
+        episode held in the file of another is listed when its holder has
+        one. It takes no bearer: the Service is in-cluster only, as for the
+        asset lookups.
       responses:
         "200":
           description: The packaged ids
@@ -318,6 +324,27 @@ components:
           type: integer
         parent_id:
           type: string
+        coveredBy:
+          type: string
+          description: >
+            On an episode held in the file of another (katalog-manager's
+            migration 045): the id of the file's holder, the first episode it
+            holds, whose package, original, subtitles and segments it plays.
+            Omitted on every other item.
+        covers:
+          type: array
+          items:
+            type: string
+          description: >
+            On the holder of a file that holds several episodes: the ids of
+            the other episodes it holds, in episode order. Omitted on every
+            other item.
+        episodeEnd:
+          type: integer
+          description: >
+            On the holder of a file that holds several episodes: the number of
+            the last episode it holds. Omitted on every other item.
+          example: 10
         min_age:
           type: integer
           minimum: 0
@@ -514,6 +541,12 @@ components:
         type:
           type: string
           example: movie
+        coveredBy:
+          type: string
+          description: >
+            On an episode held in the file of another: the id of the file's
+            holder, whose package, previous versions and original these are.
+            Omitted for every other item, the holder among them.
         package:
           description: >
             The package that plays: the item's complete version, else (before
