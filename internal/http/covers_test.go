@@ -141,3 +141,40 @@ func TestSharedFilesOnTheWire(t *testing.T) {
 		}
 	}
 }
+
+// A covered episode's subtitles and segments on the wire are those of the file
+// it plays, its holder's: the subtitles with include=subtitles, the summary
+// with include=segments, and the segments by themselves. An episode with a
+// file of its own has its own.
+func TestACoveredEpisodesSubtitlesAndSegmentsOnTheWire(t *testing.T) {
+	db := finaleCatalog(t, true)
+	db.Exec(t, `INSERT INTO com_nalet_katalog_subtitleassets (id, item_id, path, format, lang, label, isdefault)
+		VALUES ('e2f3a4b5-c6d7-4e8f-9a0b-1c2d3e4f5a6b', $1, $2, 'webvtt', 'en', 'English', true)`,
+		finale, "/var/lib/katalog/series/3f/"+show+"/episodes/"+finale+"/versions/5b4a3c2d-1e0f-4a9b-8c7d-6e5f4a3b2c1d/subs/en.vtt")
+	db.Exec(t, `INSERT INTO com_nalet_katalog_mediasegments (id, item_id, kind, startms, endms, source)
+		VALUES ('f1e2d3c4-b5a6-4978-8a9b-0c1d2e3f4a5b', $1, 'intro', 30000, 90000, 'chapter')`, finale)
+	hd := &ItemsHandler{Store: &store.Store{Pool: db.Pool}}
+	r := chi.NewRouter()
+	r.Get("/items/{id}", hd.Get)
+	r.Get("/items/{id}/segments", hd.Segments)
+
+	subtitles := []any{map[string]any{"id": "e2f3a4b5-c6d7-4e8f-9a0b-1c2d3e4f5a6b", "lang": "en", "label": "English",
+		"format": "webvtt", "default": true}}
+	summary := map[string]any{"count": 1.0, "has_intro": true, "has_credits": false, "has_recap": false}
+	segments := []any{map[string]any{"id": "f1e2d3c4-b5a6-4978-8a9b-0c1d2e3f4a5b", "kind": "intro", "start_ms": 30000.0,
+		"end_ms": 90000.0, "source": "chapter"}}
+	for _, id := range []string{finale, finaleTwo} {
+		body, _ := get(t, r, "/items/"+id+"?include=subtitles,segments", nil)
+		if !reflect.DeepEqual(body["subtitles"], subtitles) || !reflect.DeepEqual(body["segments"], summary) {
+			t.Errorf("%s: subtitles %v, segments %v; want the holder's, %v and %v", id, body["subtitles"], body["segments"],
+				subtitles, summary)
+		}
+		if body, _ = get(t, r, "/items/"+id+"/segments", nil); !reflect.DeepEqual(body["items"], segments) {
+			t.Errorf("%s/segments: %v, want the holder's, %v", id, body["items"], segments)
+		}
+	}
+	body, _ := get(t, r, "/items/"+opener+"?include=subtitles,segments", nil)
+	if _, ok := body["subtitles"]; ok || body["segments"] != nil {
+		t.Errorf("the opener: %v, want neither subtitles nor segments, as it has none", body)
+	}
+}

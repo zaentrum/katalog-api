@@ -258,6 +258,64 @@ func TestAnEpisodeSaysWhichFileItShares(t *testing.T) {
 	}
 }
 
+// fileOf is what the item id is served of the file it plays: its subtitles
+// and its segments with include=subtitles,segments, and its segments by
+// themselves, as their ids, or the error.
+func fileOf(t *testing.T, st *Store, id string) string {
+	t.Helper()
+	ctx := context.Background()
+	it, err := st.GetItemWithIncludes(ctx, id, IncludeOpts{Subtitles: true, Segments: true})
+	if err != nil {
+		return err.Error()
+	}
+	segs, err := st.ListSegments(ctx, id)
+	if err != nil {
+		return err.Error()
+	}
+	var subs, ids []string
+	for _, s := range it.Subtitles {
+		subs = append(subs, s.ID)
+	}
+	for _, s := range segs {
+		ids = append(ids, s.ID)
+	}
+	summary := "none"
+	if it.Segments != nil {
+		summary = fmt.Sprintf("%d intro %v credits %v", it.Segments.Count, it.Segments.HasIntro, it.Segments.HasCredits)
+	}
+	return fmt.Sprintf("subtitles [%s] segments [%s] summary %s", strings.Join(subs, " "), strings.Join(ids, " "), summary)
+}
+
+// A covered episode's subtitles and segments are those of the file it plays,
+// its holder's: with include=subtitles and include=segments, and its segments
+// by themselves, so a player has the subtitles of the file and its markers on
+// the file's timeline, whichever episode of it plays; whatever a covered
+// episode holds itself is not read. The holder, and an episode with a file of
+// its own, have their own; the episodes of a holder that has none have none.
+func TestACoveredEpisodesSubtitlesAndSegmentsAreItsHolders(t *testing.T) {
+	st, db := sharedFiles(t)
+	addSubtitle(t, db, "sub-h2-de", "h2", "de", "Deutsch", false)
+	addSubtitle(t, db, "sub-h2-en", "h2", "en", "English", true)
+	addSubtitle(t, db, "sub-z3", "z3", "fr", "Stray", false)
+	addSubtitle(t, db, "sub-e1", "e1", "en", "English", true)
+	db.Exec(t, `INSERT INTO com_nalet_katalog_mediasegments (id, item_id, kind, startms, endms, source) VALUES
+		('seg-h2-credits', 'h2', 'credits', 7800000, 7900000, 'chapter'),
+		('seg-h2-intro',   'h2', 'intro',   30000,   90000,   'chapter'),
+		('seg-z3',         'z3', 'recap',   0,       1000,    'manual'),
+		('seg-e1',         'e1', 'intro',   0,       1000,    'manual')`)
+	h2 := "subtitles [sub-h2-en sub-h2-de] segments [seg-h2-intro seg-h2-credits] summary 2 intro true credits true"
+	for id, want := range map[string]string{
+		"h2": h2, "z3": h2, "a4": h2,
+		"h6": "subtitles [] segments [] summary none", "c7": "subtitles [] segments [] summary none",
+		"e1":      "subtitles [sub-e1] segments [seg-e1] summary 1 intro true credits false",
+		"nothing": "not found",
+	} {
+		if got := fileOf(t, st, id); got != want {
+			t.Errorf("%s:\n got %s\nwant %s", id, got, want)
+		}
+	}
+}
+
 // A covered episode is packaged when its holder is, whatever it holds itself:
 // the holder's package is its. Before migration 045, the episodes a file holds
 // after its first are not; then the covered episodes of a packaged holder are,
@@ -291,13 +349,20 @@ func TestACoveredEpisodeIsPackagedWhenItsHolderIs(t *testing.T) {
 
 // On a catalog without migration 045 no episode is covered: each is answered
 // its own, as before, and the episodes a file holds after its first have
-// nothing to play; no item says it shares a file. Once 045 has run and the
-// file's episodes are linked, the covered ones play their holder's and every
-// read says so, without a restart.
+// nothing to play, nor subtitles or segments; no item says it shares a file.
+// Once 045 has run and the file's episodes are linked, the covered ones play
+// their holder's and every read says so, without a restart.
 func TestSharedFilesOnACatalogOlderThan045(t *testing.T) {
 	st, db := showWithSharedFiles(t)
 	ctx := context.Background()
+	addSubtitle(t, db, "sub-h2", "h2", "en", "English", true)
+	db.Exec(t, `INSERT INTO com_nalet_katalog_mediasegments (id, item_id, kind, startms, endms, source)
+		VALUES ('seg-h2', 'h2', 'intro', 30000, 90000, 'chapter')`)
+	h2 := "subtitles [sub-h2] segments [seg-h2] summary 1 intro true credits false"
 	for i := 1; i <= 2; i++ {
+		if got, want := fileOf(t, st, "z3"), "subtitles [] segments [] summary none"; got != want {
+			t.Errorf("before 045, call %d, the subtitles and segments of z3:\n got %s\nwant %s", i, got, want)
+		}
 		for item, w := range map[string]string{"h2": playsH2, "z3": nothingToPlay("z3"), "h6": playsH6, "c7": nothingToPlay("c7")} {
 			if got := playbackOf(t, st, item); got != w {
 				t.Errorf("before 045, call %d, %s:\n got %s\nwant %s", i, item, got, w)
@@ -326,6 +391,11 @@ func TestSharedFilesOnACatalogOlderThan045(t *testing.T) {
 	}
 	if eps, err := st.ListEpisodesBySeries(ctx, "s1"); err != nil || coversOf(eps) != sharedEpisodes {
 		t.Errorf("after 045, the episodes of s1:\n got %s %v\nwant %s", coversOf(eps), err, sharedEpisodes)
+	}
+	for _, id := range []string{"h2", "z3"} {
+		if got := fileOf(t, st, id); got != h2 {
+			t.Errorf("after 045, the subtitles and segments of %s:\n got %s\nwant %s", id, got, h2)
+		}
 	}
 }
 

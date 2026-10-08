@@ -392,11 +392,17 @@ func (s *Store) GetItem(ctx context.Context, id string) (Item, error) {
 // one round-trip per association (cheap: each association is a single
 // query keyed by item_id). Returns ErrNotFound when the id doesn't
 // exist, or the viewer's cap leaves the item out: then none of its
-// associations, its extras among them, is served either.
+// associations, its extras among them, is served either. The subtitles and
+// the segments are of the file the item plays: a covered episode's are its
+// holder's (covers.go).
 func (s *Store) GetItemWithIncludes(ctx context.Context, id string, inc IncludeOpts) (Item, error) {
 	it, err := s.GetItem(ctx, id)
 	if err != nil {
 		return Item{}, err
+	}
+	file := id
+	if it.CoveredBy != "" {
+		file = it.CoveredBy
 	}
 	if inc.Genres {
 		gs, err := s.listGenresFor(ctx, id)
@@ -413,7 +419,7 @@ func (s *Store) GetItemWithIncludes(ctx context.Context, id string, inc IncludeO
 		it.Cast = ps
 	}
 	if inc.Subtitles {
-		ss, err := s.listSubtitlesFor(ctx, id)
+		ss, err := s.listSubtitlesFor(ctx, file)
 		if err != nil {
 			return Item{}, err
 		}
@@ -434,7 +440,7 @@ func (s *Store) GetItemWithIncludes(ctx context.Context, id string, inc IncludeO
 		it.Extras = es
 	}
 	if inc.Segments {
-		seg, err := s.segmentSummaryFor(ctx, id)
+		seg, err := s.segmentSummaryFor(ctx, file)
 		if err != nil {
 			return Item{}, err
 		}
@@ -524,8 +530,9 @@ func (s *Store) ListEpisodesBySeries(ctx context.Context, seriesID string) ([]It
 
 // ListSegments returns the raw MediaSegments rows for an item, ordered
 // by start time. Used by the player to wire timeline markers and
-// Skip-Intro / Skip-Credits buttons. Returns ErrNotFound when the id names
-// no title, or one the viewer's cap leaves out (WithMaxAge).
+// Skip-Intro / Skip-Credits buttons. They are of the file the item plays: a
+// covered episode's are its holder's (covers.go). Returns ErrNotFound when the
+// id names no title, or one the viewer's cap leaves out (WithMaxAge).
 func (s *Store) ListSegments(ctx context.Context, itemID string) ([]Segment, error) {
 	if s == nil || s.Pool == nil {
 		return nil, ErrNoPool
@@ -535,11 +542,15 @@ func (s *Store) ListSegments(ctx context.Context, itemID string) ([]Segment, err
 	} else if !ok {
 		return nil, ErrNotFound
 	}
+	covering, err := s.covering(ctx)
+	if err != nil {
+		return nil, err
+	}
 	rows, err := s.Pool.Query(ctx, `
 		SELECT id, kind, startms, endms,
 		       COALESCE(source, ''), COALESCE(confidence, 0), COALESCE(label, '')
 		FROM com_nalet_katalog_mediasegments
-		WHERE item_id = $1
+		WHERE item_id = `+holderOf(covering, "$1")+`
 		ORDER BY startms`, itemID)
 	if err != nil {
 		return nil, fmt.Errorf("segments for %s: %w", itemID, err)
