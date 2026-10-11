@@ -48,10 +48,17 @@ var ratingColumns = []string{"certification", "certification_country", "min_age"
 // (an episode's series), whose rating the item's falls back to.
 const fromItems = `FROM com_nalet_katalog_items i LEFT JOIN com_nalet_katalog_items par ON par.id = i.parent_id`
 
-// ageSQL is the age a viewer must be to be served the item i (fromItems):
-// its own override, else its parent's override, else its parent's rating,
-// else its own rating; NULL when nothing rates it.
-const ageSQL = `COALESCE(i.min_age_override, par.min_age_override, par.min_age, i.min_age)`
+// ageOf is the age a viewer must be to be served the item the alias item
+// names, its parent the alias parent: its own override, else its parent's
+// override, else its parent's rating, else its own rating; NULL when nothing
+// rates it.
+func ageOf(item, parent string) string {
+	return `COALESCE(` + item + `.min_age_override, ` + parent + `.min_age_override, ` + parent + `.min_age, ` +
+		item + `.min_age)`
+}
+
+// ageSQL is the age a viewer must be to be served the item i (fromItems).
+var ageSQL = ageOf("i", "par")
 
 // ownAgeSQL is ageSQL for an item without a parent, a film or a series:
 // katalog-manager's idx_items_rated_age indexes it.
@@ -85,7 +92,9 @@ var unratedCatalog sync.Once
 // capFilter is the condition that keeps what the viewer capped at the age of
 // ctx (WithMaxAge) may be served of the items i (fromItems), binding values
 // with add: an item rated at most the cap, or one nothing rates when
-// ratings.unrated_for_capped says show. "" for an uncapped viewer. top says
+// ratings.unrated_for_capped says show. An episode one file holds with others
+// is held to the strictest of them besides (fileCap, covers.go): it is served
+// only when each episode of its file is. "" for an uncapped viewer. top says
 // the query lists titles without a parent alone (films, series): it then
 // reads their own rating, which katalog-manager's index serves, and a title
 // that has a parent after all is not served to a capped viewer. On a catalog
@@ -111,12 +120,21 @@ func (s *Store) capFilter(ctx context.Context, top bool, add func(any) string) (
 	if top {
 		age = ownAgeSQL
 	}
-	cond := age + " <= " + add(*maxAge) + "::int"
-	if s.showUnrated(ctx) {
+	capAge := add(*maxAge) + "::int"
+	show := s.showUnrated(ctx)
+	cond := age + " <= " + capAge
+	if show {
 		cond = "(" + cond + " OR " + age + " IS NULL)"
 	}
 	if top {
-		cond = "i.parent_id IS NULL AND " + cond
+		return "i.parent_id IS NULL AND " + cond, nil
+	}
+	covering, err := s.covering(ctx)
+	if err != nil {
+		return "", err
+	}
+	if covering {
+		cond += " AND " + fileCap(capAge, show)
 	}
 	return cond, nil
 }

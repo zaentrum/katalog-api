@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"testing"
 
@@ -437,5 +438,265 @@ func TestSharedFilesWhenTheRoleMayNotReadTheColumn(t *testing.T) {
 	}
 	if eps, err := st.ListEpisodesBySeries(ctx, "s1"); err != nil || coversOf(eps) != sharedEpisodes {
 		t.Errorf("with the column, the episodes of s1:\n got %s %v\nwant %s", coversOf(eps), err, sharedEpisodes)
+	}
+}
+
+// ratedSharedFiles is a catalog with migrations 036 and 040 whose show s1,
+// certified 12 in DE, holds, each "id: what rates it":
+//
+//	e1: S01E01, a file of its own, rated as its show: 12
+//	h2: S01E02, rated as its show: 12; its file holds z3 too
+//	z3: S01E03, an admin rated it 16
+//	h4: S01E04, an admin rated it 16; its file holds c5 too
+//	c5: S01E05, rated as its show: 12
+//
+// and whose show s2, which nothing rates, holds
+//
+//	x1: S01E01, an admin rated it 12; its file holds y2 too
+//	y2: S01E02, which nothing rates
+//
+// and the films m6, certified 6, and mu, which nothing rates. Every title is a
+// drama with Ada Example in it; the holders h2 and h4 have an intro marked.
+// Linked, the catalog has migration 045 too, and the files' episodes are
+// linked to their holders.
+func ratedSharedFiles(t *testing.T, linked bool) (*Store, *storetest.DB) {
+	t.Helper()
+	st, db := open(t)
+	db.Migrate030(t)
+	db.Migrate032(t)
+	db.Migrate036(t)
+	db.Migrate040(t)
+	db.Exec(t, `INSERT INTO com_nalet_katalog_items (id, type, title, sorttitle, parent_id, seasonnumber, episodenumber,
+			certification, certification_country, min_age, min_age_override) VALUES
+		('s1', 'series',  'A Show',      'A Show',      NULL, NULL, NULL, '12', 'DE', 12,   NULL),
+		('e1', 'episode', 'Episode 1',   'Episode 1',   's1', 1,    1,    NULL, NULL, NULL, NULL),
+		('h2', 'episode', 'Episode 2',   'Episode 2',   's1', 1,    2,    NULL, NULL, NULL, NULL),
+		('z3', 'episode', 'Episode 3',   'Episode 3',   's1', 1,    3,    NULL, NULL, NULL, 16),
+		('h4', 'episode', 'Episode 4',   'Episode 4',   's1', 1,    4,    NULL, NULL, NULL, 16),
+		('c5', 'episode', 'Episode 5',   'Episode 5',   's1', 1,    5,    NULL, NULL, NULL, NULL),
+		('s2', 'series',  'Other Show',  'Other Show',  NULL, NULL, NULL, NULL, NULL, NULL, NULL),
+		('x1', 'episode', 'Episode 1',   'Episode 1',   's2', 1,    1,    NULL, NULL, NULL, 12),
+		('y2', 'episode', 'Episode 2',   'Episode 2',   's2', 1,    2,    NULL, NULL, NULL, NULL),
+		('m6', 'movie',   'A Film',      'A Film',      NULL, NULL, NULL, '6',  'DE', 6,    NULL),
+		('mu', 'movie',   'Unrated',     'Unrated',     NULL, NULL, NULL, NULL, NULL, NULL, NULL)`)
+	db.Exec(t, `INSERT INTO com_nalet_katalog_genres (id, name) VALUES ('drama', 'Drama')`)
+	db.Exec(t, `INSERT INTO com_nalet_katalog_people (id, name) VALUES ('ada', 'Ada Example')`)
+	db.Exec(t, `INSERT INTO com_nalet_katalog_itemgenres (id, item_id, genre_id)
+		SELECT 'g-' || id, id, 'drama' FROM com_nalet_katalog_items`)
+	db.Exec(t, `INSERT INTO com_nalet_katalog_itempeople (id, item_id, person_id, role)
+		SELECT 'c-' || id, id, 'ada', 'actor' FROM com_nalet_katalog_items WHERE type <> 'series'`)
+	db.Exec(t, `INSERT INTO com_nalet_katalog_mediasegments (id, item_id, kind, startms, endms, source) VALUES
+		('seg-h2', 'h2', 'intro', 30000, 90000, 'chapter'), ('seg-h4', 'h4', 'intro', 30000, 90000, 'chapter')`)
+	if linked {
+		db.Migrate045(t)
+		cover(t, db, "h2", "z3")
+		cover(t, db, "h4", "c5")
+		cover(t, db, "x1", "y2")
+	}
+	return st, db
+}
+
+// fileAges are the ages ratedSharedFiles' titles are held to, worked out by
+// hand: each one's own first, then those of the other episodes of its file
+// (-1 unrated).
+var fileAges = map[string][]int{
+	"s1": {12}, "e1": {12}, "h2": {12, 16}, "z3": {16, 12}, "h4": {16, 12}, "c5": {12, 16},
+	"s2": {-1}, "x1": {12, -1}, "y2": {-1, 12}, "m6": {6}, "mu": {-1},
+}
+
+// servedOf is which of ids a viewer capped at maxAge may be served of
+// ratedSharedFiles, in their order: those each of whose ages is at most the
+// cap, an unrated one only when show; linked, the ages of every episode of the
+// file count, else its own alone.
+func servedOf(maxAge int, show, linked bool, ids ...string) []string {
+	out := []string{}
+	for _, id := range ids {
+		ages, ok := fileAges[id]
+		if !ok {
+			continue
+		}
+		if !linked {
+			ages = ages[:1]
+		}
+		served := true
+		for _, age := range ages {
+			if (age < 0 && !show) || age > maxAge {
+				served = false
+			}
+		}
+		if served {
+			out = append(out, id)
+		}
+	}
+	return out
+}
+
+// once is ids, each once, in their order.
+func once(ids []string) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, id := range ids {
+		if !seen[id] {
+			seen[id] = true
+			out = append(out, id)
+		}
+	}
+	return out
+}
+
+// A capped viewer is held to the strictest rating among the episodes of a
+// file: whichever of its episodes is rated above the cap, the holder or one it
+// covers, no episode of the file is served, by id or in any list, nor are its
+// segments, its subtitles, or a title that a person is credited in for it; an
+// unrated one counts as above the cap unless ratings.unrated_for_capped says
+// show. Every other title is served by its own rating, as before, and so is
+// every title on a catalog without migration 045. At each cap around the ages
+// the catalog holds, the store serves what servedOf works out by hand.
+func TestACappedViewerIsHeldToTheStrictestEpisodeOfAFile(t *testing.T) {
+	everything := []string{"s1", "e1", "h2", "z3", "h4", "c5", "s2", "x1", "y2", "m6", "mu"}
+	episodes := []string{"e1", "h2", "z3", "h4", "c5", "x1", "y2"}
+	credited := []string{"e1", "h2", "z3", "h4", "c5", "x1", "y2", "m6", "mu"}
+	for _, linked := range []bool{false, true} {
+		st, db := ratedSharedFiles(t, linked)
+		for _, setting := range []string{"", "show"} {
+			setUnrated(t, st, db, setting)
+			show := setting == "show"
+			for _, maxAge := range []int{0, 6, 11, 12, 15, 16, 18} {
+				ctx := WithMaxAge(context.Background(), maxAge)
+				at := fmt.Sprintf("045 %v, capped at %d, unrated %q", linked, maxAge, setting)
+				served := func(ids ...string) string { return strings.Join(servedOf(maxAge, show, linked, ids...), " ") }
+				sorted := func(ids ...string) string {
+					out := servedOf(maxAge, show, linked, ids...)
+					sort.Strings(out)
+					return strings.Join(out, " ")
+				}
+
+				for _, id := range everything {
+					_, err := st.GetItem(ctx, id)
+					if want := served(id) != ""; (err == nil) != want || (err != nil && !errors.Is(err, ErrNotFound)) {
+						t.Errorf("%s, GetItem(%s): %v, want served %v", at, id, err, want)
+					}
+				}
+				ids := []string{"z3", "e1", "h2", "no-such-id", "c5", "h4", "y2", "x1", "m6", "mu", "z3"}
+				if got, err := st.Visible(ctx, ids); err != nil || strings.Join(got, " ") != served(once(ids)...) {
+					t.Errorf("%s, Visible: %q %v, want %q", at, got, err, served(once(ids)...))
+				}
+				for series, eps := range map[string][]string{"s1": {"e1", "h2", "z3", "h4", "c5"}, "s2": {"x1", "y2"}} {
+					got, err := st.ListEpisodesBySeries(ctx, series)
+					switch {
+					case served(series) == "":
+						if !errors.Is(err, ErrNotFound) {
+							t.Errorf("%s, the episodes of %s, which the cap leaves out: %q %v", at, series, idsOf(got), err)
+						}
+					case err != nil || idsOf(got) != sorted(eps...):
+						t.Errorf("%s, the episodes of %s: %q %v, want %q", at, series, idsOf(got), err, sorted(eps...))
+					}
+				}
+				for typ, ids := range map[string][]string{"": everything, "episode": episodes} {
+					res, err := st.ListItems(ctx, ListOpts{Type: typ, Limit: 200})
+					if want := sorted(ids...); err != nil || idsOf(res.Items) != want || res.Total != len(strings.Fields(want)) {
+						t.Errorf("%s, the list of type %q: %q (total %d) %v, want %q", at, typ, idsOf(res.Items), res.Total, err, want)
+					}
+				}
+				for _, id := range []string{"h2", "z3", "h4", "c5"} {
+					// The intro is the holders'; a covered episode has it once linked.
+					marked := linked || id == "h2" || id == "h4"
+					segs, err := st.ListSegments(ctx, id)
+					if want := served(id) != ""; (want && (err != nil || (len(segs) == 1) != marked)) || (!want && !errors.Is(err, ErrNotFound)) {
+						t.Errorf("%s, the segments of %s: %v %v, want served %v", at, id, segs, err, want)
+					}
+					it, err := st.GetItemWithIncludes(ctx, id, IncludeOpts{Subtitles: true, Segments: true})
+					if want := served(id) != ""; (want && (err != nil || (it.Segments != nil) != marked)) || (!want && !errors.Is(err, ErrNotFound)) {
+						t.Errorf("%s, %s with its subtitles and segments: %+v %v, want served %v", at, id, it.Segments, err, want)
+					}
+					if _, err := st.ListSimilar(ctx, id, 10); (err == nil) != (served(id) != "") {
+						t.Errorf("%s, like %s: %v, want found %v", at, id, err, served(id) != "")
+					}
+				}
+				pd, err := st.GetPerson(ctx, "ada", 100, nil)
+				if err != nil || pd == nil || idsOf(pd.Items) != sorted(credited...) {
+					t.Errorf("%s, Ada's filmography: %+v %v, want %q", at, pd, err, sorted(credited...))
+				}
+				people, err := st.SearchPeople(ctx, "ada", 10)
+				want := len(servedOf(maxAge, show, linked, credited...))
+				switch {
+				case err != nil:
+					t.Fatal(err)
+				case want == 0 && len(people) != 0:
+					t.Errorf("%s, people called Ada: %+v, want nobody", at, people)
+				case want > 0 && (len(people) != 1 || people[0].Credits != want):
+					t.Errorf("%s, people called Ada: %+v, want her with %d titles", at, people, want)
+				}
+			}
+		}
+
+		// Uncapped, everything, each rated as before.
+		res, err := st.ListItems(context.Background(), ListOpts{Limit: 200})
+		if err != nil || res.Total != len(everything) {
+			t.Errorf("045 %v, uncapped: %q %d %v", linked, idsOf(res.Items), res.Total, err)
+		}
+		if got := ratingsOf(res.Items); got != "c5: 12 12 DE, e1: 12 12 DE, h2: 12 12 DE, h4: 16 - -, m6: 6 6 DE, mu: - - -, "+
+			"s1: 12 12 DE, s2: - - -, x1: 12 - -, y2: - - -, z3: 16 - -" {
+			t.Errorf("045 %v, uncapped, what each says it is rated: %s", linked, got)
+		}
+	}
+}
+
+// The owner's cases by name: a holder rated 12 whose file holds an episode an
+// admin rated 16, and a holder an admin rated 16 whose file holds an episode
+// rated 12. A viewer capped at 12 is served neither episode of either file, by
+// id, in the lists, or to play (/visible, through which a BFF holds playback,
+// subtitles and the packaged ids to the cap); a viewer capped at 16 is served
+// all four, and so is one without a cap. On a catalog without migration 045
+// each is held to its own rating, as before.
+func TestAFileRatedByItsStrictestEpisode(t *testing.T) {
+	file := []string{"h2", "z3", "h4", "c5"}
+	for _, tc := range []struct {
+		linked bool
+		cap    int
+		want   string
+	}{
+		{true, 12, ""}, {true, 16, "h2 z3 h4 c5"},
+		{false, 12, "h2 c5"}, {false, 16, "h2 z3 h4 c5"},
+	} {
+		st, _ := ratedSharedFiles(t, tc.linked)
+		ctx := WithMaxAge(context.Background(), tc.cap)
+		if got, err := st.Visible(ctx, file); err != nil || strings.Join(got, " ") != tc.want {
+			t.Errorf("045 %v, capped at %d, /visible: %q %v, want %q", tc.linked, tc.cap, got, err, tc.want)
+		}
+		eps, err := st.ListEpisodesBySeries(ctx, "s1")
+		var got []string
+		for _, it := range eps {
+			if it.ID != "e1" {
+				got = append(got, it.ID)
+			}
+		}
+		if err != nil || strings.Join(got, " ") != tc.want {
+			t.Errorf("045 %v, capped at %d, the episodes of s1 but e1: %q %v, want %q", tc.linked, tc.cap, got, err, tc.want)
+		}
+		if got, err := st.Visible(context.Background(), file); err != nil || strings.Join(got, " ") != "h2 z3 h4 c5" {
+			t.Errorf("045 %v, uncapped, /visible: %q %v, want all four", tc.linked, got, err)
+		}
+	}
+}
+
+// A role that may read the ratings but not 045's column holds each episode to
+// its own rating, as on a catalog without 045; once it may read the column, to
+// the strictest of its file.
+func TestAFileRatedByItsStrictestEpisodeWhenTheRoleMayNotReadTheColumn(t *testing.T) {
+	_, db := ratedSharedFiles(t, true)
+	role, pool := db.Role(t)
+	st := &Store{Pool: pool}
+	db.Exec(t, `GRANT SELECT (id, type, title, sorttitle, year, rating, description, tagline, durationms, seasonnumber,
+		episodenumber, parent_id, certification, certification_country, min_age, min_age_override)
+		ON com_nalet_katalog_items TO `+role)
+	ctx := WithMaxAge(context.Background(), 12)
+	file := []string{"h2", "z3", "h4", "c5"}
+	if got, err := st.Visible(ctx, file); err != nil || strings.Join(got, " ") != "h2 c5" {
+		t.Errorf("without the column: %q %v, want h2 c5, each by its own rating", got, err)
+	}
+	db.Exec(t, `GRANT SELECT ON com_nalet_katalog_items TO `+role)
+	if got, err := st.Visible(ctx, file); err != nil || len(got) != 0 {
+		t.Errorf("with the column: %q %v, want none", got, err)
 	}
 }

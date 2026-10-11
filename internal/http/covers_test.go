@@ -1,8 +1,10 @@
 package http
 
 import (
+	"encoding/json"
 	"reflect"
 	"sort"
+	"strings"
 	"testing"
 
 	"github.com/go-chi/chi/v5"
@@ -176,5 +178,72 @@ func TestACoveredEpisodesSubtitlesAndSegmentsOnTheWire(t *testing.T) {
 	body, _ := get(t, r, "/items/"+opener+"?include=subtitles,segments", nil)
 	if _, ok := body["subtitles"]; ok || body["segments"] != nil {
 		t.Errorf("the opener: %v, want neither subtitles nor segments, as it has none", body)
+	}
+}
+
+// A capped viewer on the wire is held to the strictest episode of a file, on
+// every route: the show is rated 12, and an admin rated one part of its finale
+// 16, the second part or the first (the holder). Capped at 12, neither part is
+// served: by id, with its associations or its segments, each the 404 of an id
+// there is not, nor in the series' episodes, nor by /api/v1/visible, through
+// which a BFF holds a capped viewer's playback, subtitles and packaged ids to
+// the cap; the opener, a file of its own rated 12, is. Capped at 16, all are.
+func TestAFileRatedByItsStrictestEpisodeOnTheWire(t *testing.T) {
+	for _, stricter := range []string{finaleTwo, finale} {
+		db := finaleCatalog(t, true)
+		db.Migrate036(t)
+		db.Exec(t, `UPDATE com_nalet_katalog_items SET certification = '12', certification_country = 'DE', min_age = 12
+			WHERE id = $1`, show)
+		db.Exec(t, `UPDATE com_nalet_katalog_items SET min_age_override = 16 WHERE id = $1`, stricter)
+		db.Exec(t, `INSERT INTO com_nalet_katalog_mediasegments (id, item_id, kind, startms, endms, source)
+			VALUES ('f1e2d3c4-b5a6-4978-8a9b-0c1d2e3f4a5b', $1, 'intro', 30000, 90000, 'chapter')`, finale)
+		st := &store.Store{Pool: db.Pool}
+		hd := &ItemsHandler{Store: st}
+		r := chi.NewRouter()
+		r.Use(capped)
+		r.Get("/items/{id}", hd.Get)
+		r.Get("/items/{id}/segments", hd.Segments)
+		r.Get("/series/{id}/episodes", hd.SeriesEpisodes)
+		capAt := func(age, path string) (int, string) { return serve(r, path+"?max_rating="+age, nil) }
+		at := map[string]string{finale: "the holder rated 16", finaleTwo: "the covered part rated 16"}[stricter]
+
+		for _, path := range []string{"/items/{id}", "/items/{id}/segments"} {
+			wantCode, wantBody := capAt("12", strings.Replace(path, "{id}", "no-such-id", 1))
+			for _, id := range []string{finale, finaleTwo} {
+				p := strings.Replace(path, "{id}", id, 1)
+				if code, body := capAt("12", p); code != wantCode || body != wantBody {
+					t.Errorf("%s, capped at 12, %s: %d %q, want %d %q as for an id there is not", at, p, code, body, wantCode, wantBody)
+				}
+				if code, _ := capAt("16", p); code != 200 {
+					t.Errorf("%s, capped at 16, %s: %d, want 200", at, p, code)
+				}
+			}
+		}
+		for age, want := range map[string]string{"12": opener, "16": opener + " " + finale + " " + finaleTwo} {
+			code, body := capAt(age, "/series/"+show+"/episodes")
+			var got struct {
+				Items []struct {
+					ID string `json:"id"`
+				} `json:"items"`
+			}
+			_ = json.Unmarshal([]byte(body), &got)
+			var ids []string
+			for _, it := range got.Items {
+				ids = append(ids, it.ID)
+			}
+			if code != 200 || strings.Join(ids, " ") != want {
+				t.Errorf("%s, capped at %s, the episodes: %d %q, want %q", at, age, code, ids, want)
+			}
+		}
+		full := router(t, st)
+		for age, want := range map[string]string{
+			"12": `{"ids":["` + opener + `"]}`,
+			"16": `{"ids":["` + finaleTwo + `","` + opener + `","` + finale + `"]}`,
+		} {
+			path := "/api/v1/visible?ids=" + finaleTwo + "," + opener + "," + finale + "&max_rating=" + age
+			if code, body := serve(full, path, nil); code != 200 || body != want {
+				t.Errorf("%s, %s: %d %s, want %s", at, path, code, body, want)
+			}
+		}
 	}
 }
