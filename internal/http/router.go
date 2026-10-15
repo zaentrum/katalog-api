@@ -105,6 +105,15 @@ func NewRouter(cfg config.Config, st *store.Store, verifier *auth.Verifier) (htt
 	// bottom of every movie/series detail page (#115).
 	api.Get("/items/{id}/similar", items.Similar)
 
+	// What the library holds, by the identities titles have outside it
+	// (ADR-0012): a series season by season, a movie, or a page of every title
+	// of a type. For a service that thinks in those identities and holds no
+	// catalog ids, such as an addon's service account, or a signed-in person:
+	// behind the bearer like every read above, and not behind capped. Holdings
+	// are the library's, unfiltered, so the handler refuses a capped request
+	// (403) instead of serving it more than its cap allows.
+	r.With(verifier.Middleware).Get("/api/v1/holdings", items.Holdings)
+
 	r.Mount("/api/v1", api)
 	return r, nil
 }
