@@ -13,7 +13,8 @@ info:
     as if the catalog did not hold it: left out of a list and its total, and
     404 by id, as an id there is not. An episode is rated as its series
     unless an admin rated it. A cap that is no whole number of years is the
-    strictest, 0.
+    strictest, 0. The holdings (`/api/v1/holdings`) are the library's and are
+    not filtered: a capped request is refused them (403).
 servers:
   - url: https://katalog-api.example.com
 paths:
@@ -192,6 +193,110 @@ paths:
                     type: array
                     items:
                       type: string
+  /api/v1/holdings:
+    get:
+      summary: What the library holds, by identity
+      description: >
+        For a service that thinks in the identities titles have outside the
+        catalog (a TMDB, TVDB or IMDb id) and holds no catalog ids, such as an
+        addon. With an identity, the series that carries it, season by season
+        (SeriesHoldings), or the movie (MovieHolding); without, a page of every
+        title of the type (HoldingsPage). One identity is enough, and one no
+        title carries does not keep the others from finding it; identities
+        that name different titles are 400. A tmdb id names a title with its
+        type: TMDB numbers films and shows apart. A title the catalog holds
+        twice is answered as one: a series as the first of them made, with the
+        episodes of each; a movie as the one that plays, else one with a file,
+        else the first made. Any bearer the verifier admits reads them, a
+        signed-in person's and an addon's service account's alike. They are
+        the library's, unfiltered by any rating, and say what is held, never
+        what anyone wants: a request capped at an age, by the bearer's
+        max_rating claim or the max_rating parameter, is refused (403) rather
+        than served them.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - in: query
+          name: type
+          required: true
+          schema:
+            type: string
+            enum: [series, movie]
+        - in: query
+          name: tmdb
+          description: The title's TMDB id, a number (a series' is its show's).
+          schema:
+            type: string
+            pattern: "^[0-9]{1,20}$"
+          example: "97546"
+        - in: query
+          name: tvdb
+          description: The series' TVDB id, a number. A series only.
+          schema:
+            type: string
+            pattern: "^[0-9]{1,20}$"
+          example: "362392"
+        - in: query
+          name: imdb
+          description: The title's IMDb id.
+          schema:
+            type: string
+            pattern: "^tt[0-9]{1,20}$"
+          example: tt9208876
+        - in: query
+          name: page
+          description: The page of the listing, from 1. Without an identity only.
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - in: query
+          name: pageSize
+          description: Titles a page of the listing holds. Without an identity only.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 1000
+            default: 200
+      responses:
+        "200":
+          description: The series' holdings, the movie's, or a page of the listing
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/SeriesHoldings"
+                  - $ref: "#/components/schemas/MovieHolding"
+                  - $ref: "#/components/schemas/HoldingsPage"
+        "400":
+          description: >
+            A request the holdings cannot answer, and why: no type or another
+            one; an identity the type is not looked up by (tvdb for a movie),
+            empty, malformed, or given twice with two values; identities that
+            name different titles; page or pageSize no whole number in range,
+            a page past the last, or either with an identity; a parameter the
+            holdings do not take.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example: {"error": "tmdb 97546 and tvdb 81189 name different series"}
+        "401":
+          description: No bearer, or one that does not verify
+        "403":
+          description: >
+            A token for an audience not allowed, or a request capped at an
+            age (with {"error": "..."})
+        "404":
+          description: No title of the type carries any of the identities
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example: {"error": "no series has tmdb 97546"}
+        "503":
+          description: >
+            The issuer cannot be reached yet, or the role may not read the
+            catalog's identities (with {"error": "..."})
   /api/v1/people:
     get:
       summary: Search people by name
@@ -345,6 +450,12 @@ components:
             On the holder of a file that holds several episodes: the number of
             the last episode it holds. Omitted on every other item.
           example: 10
+        externalIds:
+          $ref: "#/components/schemas/ExternalIds"
+          description: >
+            The identities the title has outside the catalog, on every read
+            of an item. Omitted when the catalog keeps none, and while the
+            role may not read them.
         min_age:
           type: integer
           minimum: 0
@@ -403,6 +514,133 @@ components:
           type: array
           items:
             type: string
+    ExternalIds:
+      type: object
+      description: >
+        The identities a title has outside the catalog, as enrichment found
+        them: for each source the catalog keeps an id of it in, keyed as
+        stored, that id. The sources in use are tmdb, tvdb and imdb for a
+        film or a series, and tmdb-episode for an episode. Of two ids of one
+        source the catalog keeps for a title, the same one is sent every time.
+      additionalProperties:
+        type: string
+      example: {"tmdb": "97546", "tvdb": "362392", "imdb": "tt9208876"}
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+          description: What is wrong, in a sentence.
+    SeriesHoldings:
+      type: object
+      required: [seriesId, title, year, externalIds, seasons]
+      properties:
+        seriesId:
+          type: string
+        title:
+          type: string
+        year:
+          type: [integer, "null"]
+        externalIds:
+          $ref: "#/components/schemas/ExternalIds"
+        seasons:
+          type: array
+          description: >
+            In season order, the specials (0) among them; empty for a series
+            the catalog holds no episode of. An episode without a season or an
+            episode number has no place among them and is left out.
+          items:
+            $ref: "#/components/schemas/SeasonHoldings"
+    SeasonHoldings:
+      type: object
+      required: [season, episodes]
+      properties:
+        season:
+          type: integer
+          minimum: 0
+        episodes:
+          type: array
+          description: Every episode the catalog holds of the season, in episode order.
+          items:
+            $ref: "#/components/schemas/EpisodeHolding"
+    EpisodeHolding:
+      type: object
+      required: [episode, itemId, hasFile, playable, coveredBy]
+      properties:
+        episode:
+          type: integer
+        itemId:
+          type: string
+        hasFile:
+          type: boolean
+          description: >
+            The catalog records a file for it: the file it was taken in from
+            (as /api/v1/items/{id}/asset answers it) or its package. An
+            original retired after packaging is no file.
+        playable:
+          type: boolean
+          description: It is packaged, as /api/v1/packaged-ids says.
+        coveredBy:
+          type: [string, "null"]
+          description: >
+            On an episode held in the file of another (katalog-manager's
+            migration 045): the holder, whose hasFile and playable these are.
+            null on every other episode.
+    MovieHolding:
+      type: object
+      required: [itemId, title, year, externalIds, hasFile, playable]
+      properties:
+        itemId:
+          type: string
+        title:
+          type: string
+        year:
+          type: [integer, "null"]
+        externalIds:
+          $ref: "#/components/schemas/ExternalIds"
+        hasFile:
+          type: boolean
+          description: The catalog records a file for it, as for an episode.
+        playable:
+          type: boolean
+          description: It is packaged.
+    HoldingsPage:
+      type: object
+      required: [items, page, pageSize, total]
+      properties:
+        items:
+          type: array
+          description: >
+            Every title of the type, in id order, which renaming a title does
+            not change.
+          items:
+            $ref: "#/components/schemas/TitleHolding"
+        page:
+          type: integer
+        pageSize:
+          type: integer
+        total:
+          type: integer
+          description: How many titles of the type the catalog holds.
+    TitleHolding:
+      type: object
+      required: [itemId, title, year, externalIds]
+      properties:
+        itemId:
+          type: string
+        title:
+          type: string
+        year:
+          type: [integer, "null"]
+        externalIds:
+          $ref: "#/components/schemas/ExternalIds"
+          description: "{} for a title the catalog keeps no identity of."
+        heldEpisodes:
+          type: integer
+          description: >
+            On a series only: how many of its episodes have a file, as its
+            holdings count them.
     CastEntry:
       type: object
       required: [name, role]

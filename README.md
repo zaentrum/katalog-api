@@ -6,8 +6,9 @@ Postgres tables under the `cloud_katalog_ro` role and serves product apps
 
 ## Status
 
-Serves browse, search, item detail, people and the stream services' asset and
-playback lookups over the catalog tables; `/healthz` and `/metrics` alongside.
+Serves browse, search, item detail, people, what the library holds by identity
+and the stream services' asset and playback lookups over the catalog tables;
+`/healthz` and `/metrics` alongside.
 The surface is described in [`api/openapi.yaml`](api/openapi.yaml).
 
 ## Design
@@ -94,7 +95,10 @@ search leave it out (and find no one credited in none of what is left), and
 condition in each query, over the title's rating columns and its parent's
 (joined by primary key); a list of films or series reads their own rating,
 which katalog-manager's `idx_items_rated_age` indexes. On a catalog that rates
-nothing yet, a capped viewer is served nothing.
+nothing yet, a capped viewer is served nothing. The one route behind the
+bearer the cap does not filter is the holdings, which are the library's: a
+capped request is refused them (see [Holdings by
+identity](#holdings-by-identity)).
 
 Every item says what it is rated: `min_age` (omitted when nothing rates it),
 and `certification` with `certification_country`, the certification the age
@@ -224,6 +228,131 @@ an item of its own (its title, its numbers) and no file, and names the holder
 
 On a catalog without 045, or with a role that may not read the column, no
 episode is covered and every answer is as before.
+
+## Identities
+
+Every item says the identities its title has outside the catalog, as
+enrichment found them (the catalog's base table
+`com_nalet_katalog_itemexternalids`): `externalIds`, for each source the
+catalog keeps an id of it in, keyed as stored, that id. The sources in use are
+`tmdb`, `tvdb` and `imdb` for a film or a series, and `tmdb-episode` for an
+episode.
+
+```json
+{"id": "f001aeff-9c18-4183-b51b-51403af2515e", "type": "movie", "title": "A Film", "year": 2024,
+ "externalIds": {"imdb": "tt0004711", "tmdb": "4711"}}
+```
+
+- On every read of an item: by id, the lists, a series' episodes, more like a
+  title and a person's filmography. Omitted when the catalog keeps none, so
+  such an item is sent as before.
+- A row whose source or id is blank is none. Of two ids of one source the
+  catalog keeps for a title (nothing stops it), the same one is sent every
+  time.
+- A role that may not read the table is served its items without them, until
+  it may (`GRANT SELECT ON com_nalet_katalog_itemexternalids TO <role>`).
+
+## Holdings by identity
+
+A service that thinks in those identities rather than in catalog ids, such as
+an addon, asks what the library holds by them (the platform's
+[ADR-0012](https://github.com/zaentrum/zaentrum/blob/main/docs/adr/0012-catalog-identity-for-addons.md)).
+The holdings say what the library holds, and never what anyone wants.
+
+`GET /api/v1/holdings?type=series&tmdb=97546` (or `tvdb=`, `imdb=`) answers
+the series that carries the identity, season by season:
+
+```json
+{"seriesId": "3f6b2c1e-8d4a-4e7f-9b0c-5a1d2e3f4a5b", "title": "A Show", "year": 2020,
+ "externalIds": {"imdb": "tt9208876", "tmdb": "97546", "tvdb": "362392"},
+ "seasons": [
+   {"season": 0, "episodes": [
+     {"episode": 1, "itemId": "5e6f7a8b-9c0d-4e1f-8a2b-3c4d5e6f7a8b", "hasFile": true, "playable": true, "coveredBy": null}]},
+   {"season": 1, "episodes": [
+     {"episode": 1, "itemId": "7d6c5b4a-3e2f-4a1b-8c0d-9e8f7a6b5c4d", "hasFile": true, "playable": false, "coveredBy": null},
+     {"episode": 9, "itemId": "a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d", "hasFile": true, "playable": true, "coveredBy": null},
+     {"episode": 10, "itemId": "0c9d8e7f-6a5b-4c3d-9e1f-2a3b4c5d6e7f", "hasFile": true, "playable": true,
+      "coveredBy": "a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d"}]}]}
+```
+
+- The seasons come in their order, the specials (0) among them, and each
+  episode the catalog holds of the series in its season, in episode order. An
+  episode without a season or an episode number has no place among them and
+  is left out.
+- `hasFile`: the catalog records a file for the episode, the file it was taken
+  in from (as `/items/{id}/asset` answers it) or its package. An original
+  retired after packaging is no file, but its package is.
+- `playable`: the episode is packaged, as `/packaged-ids` says.
+- A covered episode (see [Episodes that share a file](#episodes-that-share-a-file))
+  names its holder in `coveredBy`, and its `hasFile` and `playable` are the
+  holder's; `coveredBy` is `null` on every other episode.
+
+`GET /api/v1/holdings?type=movie&tmdb=4711` (or `imdb=`) answers the movie:
+
+```json
+{"itemId": "f001aeff-9c18-4183-b51b-51403af2515e", "title": "A Film", "year": 2024,
+ "externalIds": {"imdb": "tt0004711", "tmdb": "4711"}, "hasFile": true, "playable": true}
+```
+
+- One identity is enough, and one no title carries does not keep the others
+  from finding it. Identities that name different titles are 400.
+- A tmdb id names a title with its type: TMDB numbers films and shows apart.
+- 404 when no title of the type carries any of the identities given.
+- `year` is `null` when the catalog does not know it; `externalIds` are all
+  the title's identities.
+- A title the catalog holds twice (two series that carry one identity, as a
+  show the scanner made twice) is answered as one: a series as the first of
+  them made, with the episodes of each; a movie as the one that plays, else
+  one with a file, else the first made.
+
+`GET /api/v1/holdings?type=series` (or `type=movie`) pages every title of the
+type, so a service can follow the whole library without copying it:
+
+```json
+{"items": [
+   {"itemId": "3f6b2c1e-8d4a-4e7f-9b0c-5a1d2e3f4a5b", "title": "A Show", "year": 2020,
+    "externalIds": {"imdb": "tt9208876", "tmdb": "97546", "tvdb": "362392"}, "heldEpisodes": 4}],
+ "page": 1, "pageSize": 200, "total": 2}
+```
+
+- In id order, which renaming a title does not change. `page` from 1,
+  `pageSize` 200 unless asked, at most 1000. `total` is how many titles of the
+  type there are; page 1 is there when there are none, and a later page past
+  the last is 400.
+- A title the catalog keeps no identity of is listed with `externalIds: {}`.
+- `heldEpisodes`, on a series only: how many of its episodes have a file, as
+  its holdings count them.
+
+A request the holdings cannot answer is 400 with `{"error": "..."}` saying
+why: no `type` or another one; an identity the type is not looked up by
+(`tvdb` for a movie); one empty or malformed (a tmdb or tvdb id is a number,
+an imdb id `tt` and a number), or given twice with two values; identities that
+name different titles; `page` or `pageSize` no whole number in range, a page
+past the last, or either with an identity; and a parameter the holdings do not
+take, so that a misspelt identity is not read as a request for the listing.
+404 says which identities nothing carries. While the role may not read the
+identities the holdings are 503, never an answer that nothing is held.
+
+Who reads them is who reads the catalog: the route is behind the bearer like
+every other read, and the verifier admits any token of the issuer for one of
+`KATALOG_API_OIDC_AUDIENCE`'s audiences, a signed-in person's and an addon's
+service account's (the realm role `zaentrum-addon`) alike. katalog-api checks
+no role. An addon's client needs that audience on its tokens, as the bundled
+realm's clients have `chino`.
+
+The holdings are the library's, not a viewer's: no rating cap applies to them,
+nor anything else that leaves a title out of a viewer's lists. So they are
+never served to a request capped at an age: one whose bearer carries
+`max_rating`, or that passes the `max_rating` parameter, is 403, as a capped
+viewer is served nothing above the cap.
+
+The identities have no index but their primary key, as katalog-manager creates
+the table. So a lookup by identity reads the table once (a hash join of the
+identities asked), and so does each page of the listing and each read of items
+for the identities of all of them, in one query by their ids. An index on
+`(source, externalid)` would serve the lookups, and one on `(item_id)` the
+reads. A series' episodes are found by `parent_id`, which has no index either;
+their files by `idx_playbackassets_item` (042), their holders by 045's index.
 
 ## Catalog schema
 
