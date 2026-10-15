@@ -308,10 +308,9 @@ func (s *Store) PackagedIDs(ctx context.Context) ([]string, error) {
 		of = "COALESCE(NULLIF(i.coveredby, ''), i.id)"
 	}
 	rows, err := s.Pool.Query(ctx, `
-		SELECT DISTINCT i.id
+		SELECT i.id
 		FROM com_nalet_katalog_items i
-		JOIN com_nalet_katalog_playbackassets p ON p.item_id = `+of+`
-		WHERE p.kind = 'packaged' AND i.type IN ('movie', 'episode')
+		WHERE i.type IN ('movie', 'episode') AND `+packagedSQL(of)+`
 		ORDER BY i.id`)
 	if err != nil {
 		return nil, fmt.Errorf("packaged ids: %w", err)
@@ -324,4 +323,23 @@ func (s *Store) PackagedIDs(ctx context.Context) ([]string, error) {
 		ids = []string{}
 	}
 	return ids, nil
+}
+
+// packagedSQL is the SQL that says whether the item of names (an SQL
+// expression) has a package: a packaged asset, which katalog-manager writes
+// when it records an item's package, before the library and in it alike. It
+// is what the packaged ids are (PackagedIDs) and what plays in the holdings.
+func packagedSQL(of string) string {
+	return `EXISTS (SELECT 1 FROM com_nalet_katalog_playbackassets pk WHERE pk.item_id = ` + of +
+		` AND pk.kind = 'packaged')`
+}
+
+// fileSQL is the SQL that says whether the item of names (an SQL expression)
+// has a file in the library: the file it was taken in from, an asset of kind
+// primary (a row without a kind is one), as /asset answers it; or its package
+// (packagedSQL). An original retired after packaging, whose file is gone, is
+// none.
+func fileSQL(of string) string {
+	return `EXISTS (SELECT 1 FROM com_nalet_katalog_playbackassets fa WHERE fa.item_id = ` + of +
+		` AND COALESCE(fa.kind, 'primary') IN ('primary', 'packaged'))`
 }
