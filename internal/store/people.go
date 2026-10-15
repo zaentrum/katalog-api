@@ -260,7 +260,13 @@ func (s *Store) GetPerson(ctx context.Context, id string, limit int, langs []str
 		it.Roles = roles
 		pd.Items = append(pd.Items, it)
 	}
-	return &pd, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if err := s.withExternalIDs(ctx, pd.Items); err != nil {
+		return nil, err
+	}
+	return &pd, nil
 }
 
 // pickBiography picks one text out of a person's biographies (a JSON object of

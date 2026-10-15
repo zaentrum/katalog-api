@@ -173,6 +173,9 @@ func (s *Store) ListItems(ctx context.Context, opts ListOpts) (ListResult, error
 	if err := rows.Err(); err != nil {
 		return ListResult{}, err
 	}
+	if err := s.withExternalIDs(ctx, items); err != nil {
+		return ListResult{}, err
+	}
 	return ListResult{Items: items, Total: total, Limit: opts.Limit, Offset: opts.Offset}, nil
 }
 
@@ -316,7 +319,13 @@ func (s *Store) ListSimilar(ctx context.Context, itemID string, limit int) ([]It
 		}
 		out = append(out, it)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if err := s.withExternalIDs(ctx, out); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 // =============================================================================
@@ -385,7 +394,14 @@ func (s *Store) GetItem(ctx context.Context, id string) (Item, error) {
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Item{}, ErrNotFound
 	}
-	return it, err
+	if err != nil {
+		return Item{}, err
+	}
+	one := []Item{it}
+	if err := s.withExternalIDs(ctx, one); err != nil {
+		return Item{}, err
+	}
+	return one[0], nil
 }
 
 // GetItemWithIncludes loads an item plus the requested associations in
@@ -525,7 +541,13 @@ func (s *Store) ListEpisodesBySeries(ctx context.Context, seriesID string) ([]It
 		}
 		out = append(out, it)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if err := s.withExternalIDs(ctx, out); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 // ListSegments returns the raw MediaSegments rows for an item, ordered

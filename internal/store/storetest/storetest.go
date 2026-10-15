@@ -225,7 +225,8 @@ func firstLine(s string) string {
 }
 
 // baseSchema is the part of the CAP base schema this service's people,
-// similarity, segment, rating and playback queries read.
+// similarity, segment, rating, playback and identity queries read. The items'
+// identities have no index but their primary key, as in the catalog.
 const baseSchema = `
 CREATE TABLE com_nalet_katalog_items (
   id VARCHAR(36) NOT NULL PRIMARY KEY,
@@ -235,6 +236,10 @@ CREATE TABLE com_nalet_katalog_items (
   sorttitle VARCHAR(255), year INTEGER, description TEXT, rating DECIMAL(3, 1), durationms BIGINT,
   parent_id VARCHAR(36), seasonnumber INTEGER, episodenumber INTEGER, tagline VARCHAR(500),
   metadatalocked BOOLEAN NOT NULL DEFAULT false
+);
+CREATE TABLE com_nalet_katalog_itemexternalids (
+  id VARCHAR(36) NOT NULL PRIMARY KEY, item_id VARCHAR(36) NOT NULL,
+  source VARCHAR(30) NOT NULL, externalid VARCHAR(120) NOT NULL
 );
 CREATE TABLE com_nalet_katalog_genres (
   id VARCHAR(36) NOT NULL PRIMARY KEY, name VARCHAR(80) NOT NULL

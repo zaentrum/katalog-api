@@ -32,6 +32,12 @@ type Item struct {
 	Covers     []string `json:"covers,omitempty"`
 	EpisodeEnd *int     `json:"episodeEnd,omitempty"`
 
+	// ExternalIDs are the identities the title has outside the catalog
+	// (externalids.go): for each source the catalog keeps an id of it in
+	// (tmdb, tvdb, imdb, an episode's tmdb-episode), keyed as stored, that
+	// id. Omitted when it keeps none, and while this role may not read them.
+	ExternalIDs map[string]string `json:"externalIds,omitempty"`
+
 	// MinAge is the age a viewer must be to be served the item: an admin's
 	// rating of it, else (an episode) its series' rating, else the minimum
 	// age its certification means; nil when nothing rates it. A pointer, so
