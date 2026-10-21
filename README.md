@@ -6,7 +6,7 @@ Postgres tables under the `cloud_katalog_ro` role and serves product apps
 
 ## Status
 
-Serves browse, search, item detail, people, what the library holds by identity
+Serves browse, a ranked search, item detail, people, what the library holds by identity
 and the stream services' asset and playback lookups over the catalog tables;
 `/healthz` and `/metrics` alongside.
 The surface is described in [`api/openapi.yaml`](api/openapi.yaml).
@@ -17,6 +17,61 @@ The surface is described in [`api/openapi.yaml`](api/openapi.yaml).
   through `katalog-manager-api`.
 - `katalog-api` only ever runs SELECTs under the `cloud_katalog_ro` Postgres
   role, so it is stateless and HPA-scalable.
+
+## Search
+
+`GET /api/v1/search?q=` is one search of the catalog: its titles, films,
+series and episodes ranked together by how they match the query, best first,
+and the people whose names match it, ranked apart:
+`{"items": [...], "people": [...]}`. `types=` names the types of title to
+look at (`movie,series,episode`, the default), `limit=` how many titles
+(30, at most 100), `people=` how many people (12, at most 50; 0 none).
+
+A title, a name and a plot are read normalized, as katalog-manager's
+migration 049 indexes them: lower case, accents off, apostrophes dropped,
+every other mark a space, and with the marks inside a word dropped too. So
+"widows bay", "widow's bay" and "Widow´s Bay" are one, "leon" finds "Léon"
+and "spiderman" "Spider-Man".
+
+| Tier | `match` | The title, best first |
+| --- | --- | --- |
+| 1 | `exact` | is the query |
+| 2 | `prefix` | begins with it, word by word: each word of the query begins the word of the title in its place ("wido", "widow b" → "Widow's Bay") |
+| 3 | `words` | holds every word of it, each the beginning of a word, in any order ("widow" → "Black Widow") |
+| 4 | `alternative` | ... a series' other name: the one the library files it under (046's `scantitle`) |
+| 5 | as its title | an episode whose title matches as in 1–3, after every film and series; it names its `series` |
+| 6 | `similar` | is close to it, a typo ("nevrland" → "Finding Neverland"): every word of the query begins a word of the title or is close to one (pg_trgm's strict word similarity, 0.5; words of four characters and more); only while tiers 1–5 fill no page; films and series before episodes |
+| 7 | `plot` | its plot holds every word: only when no title matched in tiers 1–5 |
+
+Within a tier: how close the title is to the query (trigram similarity; a
+typo by the word similarity it was found by), then the rating, then the
+title. A query shorter than three characters reads the beginnings of titles
+alone (tiers 1–2). A search ranks at most a few times the limit of each kind
+of candidate (the shortest titles first), so a query that matches thousands
+of titles ranks only the best of them.
+
+An episode names its series, `{"id", "title", "matched"}`: `matched` says
+the series matched the query by its own title in the same search, so a client
+can show the two as one card. People are ranked by the same tiers of their
+name (`alternative`: another name they are known by, 030's `alsoknownas`; no
+plot), within a tier by the titles that credit them, then how close the name
+is, then the name; a person credited on no title is not found.
+
+`GET /api/v1/movies?q=`, `/series?q=` and `/episodes?q=` without a filter or
+an order of their own are ranked the same way within their type (the clients
+before `/search` ask for films and series apart). With a filter or another
+order, `q` matches a title, a series' other name or a plot, as normalized.
+
+Until katalog-manager's 049 is in place (katalog-manager builds its indexes
+in the background after it starts), a search matches as before 049: by the
+catalog's `search_vector` column where there is one, else by the title, and
+people as `GET /api/v1/people` finds them. The store looks at the catalog
+again every 15 seconds until it is.
+
+Measured on a generated catalog of 78,000 items and 16,000 people
+(PostgreSQL 17 on one core of a development machine, from the query to the page): a search of
+films and series answers in 1–3 ms, a one- to three-letter one in 4–13 ms,
+the same with episodes in up to 25 ms; the people in 1–12 ms.
 
 ## Credits and people
 
@@ -389,8 +444,10 @@ go test ./...
 The store and handler tests that need PostgreSQL are skipped unless
 `KATALOG_API_TEST_DATABASE_URL` names a database in which they may create
 and drop schemas and roles (each test makes its own schema, with the catalog
-tables before and after the migrations it reads: 030, 032, 036, 038, 039, 040
-and 045).
+tables before and after the migrations it reads: 030, 032, 036, 038, 039, 040,
+045, 046 and 049). CI runs them against PostgreSQL 16. The search's golden
+queries (`internal/store/search_test.go`) rank a fixture catalog as a viewer
+should see it.
 A throwaway server:
 
 ```bash
@@ -400,7 +457,8 @@ KATALOG_API_TEST_DATABASE_URL='postgres://postgres@127.0.0.1:55434/postgres?sslm
 pg_ctl -D /tmp/pg-katalog-api stop
 ```
 
-It needs the `unaccent` extension (PostgreSQL contrib), as the catalog does.
+It needs the `unaccent` and `pg_trgm` extensions (PostgreSQL contrib), as the
+catalog does.
 
 ## Build the container
 

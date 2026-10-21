@@ -24,21 +24,147 @@ paths:
       responses:
         "200":
           description: ok
-  /api/v1/items:
+  /api/v1/search:
     get:
-      summary: List catalog items
+      summary: Search the catalog
+      description: >
+        One search of the catalog: its titles, films, series and episodes
+        ranked together by how they match the query, best first, and the
+        people whose names match it, ranked apart. A title, a name and a plot
+        are read normalized: lower case, accents off, apostrophes dropped,
+        every other mark a space, and with the marks inside a word dropped
+        too ("widows bay", "widow's bay" and "Widow´s Bay" are one; "leon"
+        finds "Léon", "spiderman" "Spider-Man"). The tiers of a title, best
+        first, each its match:
+        exact (the title is the query);
+        prefix (the title begins with the query, word by word: each word of
+        the query begins the word of the title in its place, so "widow b"
+        begins "Widow's Bay");
+        words (every word of the query begins a word of the title, in any
+        order);
+        alternative (... of a series' other name, the one the library files
+        it under);
+        then the episodes whose titles match so, after every film and series;
+        similar (the title is close to the query, a typo: only while the
+        tiers above fill no page; films and series before episodes);
+        plot (every word of the query begins a word of the plot: only when no
+        title matched by the tiers above it, typos aside).
+        Within a tier a title is ranked by how close its title is to the
+        query (trigram similarity), then by its rating, then by its title. A
+        query shorter than three characters reads the beginnings of titles
+        and names alone. A person is ranked by the same tiers of their name
+        (alternative: another name they are known by; no plot), and within a
+        tier by the titles that credit them, then how close the name is, then
+        the name; a person credited on no title is not found. A capped viewer
+        is served what the cap allows: a person's credits count the titles it
+        allows. Until katalog-manager's migration 049 is in place (it builds
+        the indexes in the background after it starts), titles match as the
+        list endpoints matched them before it (a match of words each, by the
+        catalog's search vector or else the title) and people as GET /people
+        finds them, without a match.
       security: [{ bearerAuth: [] }]
       parameters:
         - $ref: "#/components/parameters/MaxRating"
         - in: query
-          name: cursor
+          name: q
+          description: The query. A blank one finds nothing.
           schema:
             type: string
+          example: widows bay
+        - in: query
+          name: types
+          description: >
+            The types of title to look at, comma separated; the parameter may
+            repeat. Unknown types are ignored; none named is all three.
+          schema:
+            type: string
+            default: movie,series,episode
+          example: movie,series
+        - in: query
+          name: limit
+          description: How many titles.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 30
+        - in: query
+          name: people
+          description: How many people; 0 looks for none.
+          schema:
+            type: integer
+            minimum: 0
+            maximum: 50
+            default: 12
+      responses:
+        "200":
+          description: The titles and the people found, best first
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, people]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Item"
+                  people:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Person"
+  /api/v1/items:
+    get:
+      summary: List catalog items
+      description: >
+        Every type's items, and with q those that match it by their title, a
+        series' other name or their plot, read as /api/v1/search reads them
+        (before katalog-manager's migration 049, by the catalog's search
+        vector, else the title). The type lists (/api/v1/movies, /series,
+        /episodes, /albums) take the same parameters; on /movies, /series and
+        /episodes a q without a filter (genre, year_min, year_max,
+        rating_min) or an order of its own (sort other than title) is ranked
+        as /api/v1/search ranks the titles of that type, and total counts what
+        that search found.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/MaxRating"
+        - in: query
+          name: q
+          schema:
+            type: string
+        - in: query
+          name: genre
+          schema:
+            type: string
+        - in: query
+          name: year_min
+          schema:
+            type: integer
+        - in: query
+          name: year_max
+          schema:
+            type: integer
+        - in: query
+          name: rating_min
+          schema:
+            type: number
+        - in: query
+          name: sort
+          schema:
+            type: string
+            enum: [title, rating, year, newest]
         - in: query
           name: limit
           schema:
             type: integer
+            maximum: 200
             default: 50
+        - in: query
+          name: offset
+          schema:
+            type: integer
+            default: 0
       responses:
         "200":
           description: A page of items
@@ -514,6 +640,28 @@ components:
           type: array
           items:
             type: string
+        match:
+          description: >
+            On a search's titles only (and a type's list ranked as one): how
+            the title matched the query, its tier. An episode ranks after
+            every film and series its match would put it beside.
+          type: string
+          enum: [exact, prefix, words, alternative, similar, plot]
+        series:
+          description: >
+            On an episode a search found: its series (its parent, or its
+            parent's when the parent is a season), and whether the series
+            matched the query by its own title in the same search, so that a
+            client can show the two as one.
+          type: object
+          required: [id, title, matched]
+          properties:
+            id:
+              type: string
+            title:
+              type: string
+            matched:
+              type: boolean
     ExternalIds:
       type: object
       description: >
@@ -723,6 +871,12 @@ components:
           description: >
             The catalog holds the person's primary portrait, served by the
             catalog manager at /api/artwork/person/{id}/profile.
+        match:
+          type: string
+          enum: [exact, prefix, words, alternative, similar]
+          description: >
+            On /api/v1/search only: how the name matched the query
+            (alternative: another name the person is known by).
     PersonDetail:
       allOf:
         - $ref: "#/components/schemas/Person"
@@ -768,8 +922,12 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/Item"
-        nextCursor:
-          type: string
+        total:
+          type: integer
+        limit:
+          type: integer
+        offset:
+          type: integer
     Playback:
       type: object
       required: [itemId, type, package, previous, original]
