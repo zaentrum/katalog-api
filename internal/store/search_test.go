@@ -319,3 +319,24 @@ func TestASearchBefore049(t *testing.T) {
 		t.Errorf("people before 049: %+v %v", people, err)
 	}
 }
+
+// A list's query with an order of its own matches a title or a plot as 049
+// normalizes them, in that order: not ranked.
+func TestAListQueryWithAnOrder(t *testing.T) {
+	st, _ := searchFixtureCatalog(t)
+	res, err := st.ListItems(context.Background(), ListOpts{Type: "movie", Query: "widow", Sort: "rating", Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, it := range res.Items {
+		got = append(got, it.ID)
+	}
+	if strings.Join(got, " ") != "winter-soldier leon-morin black-widow long-winter harbour" || res.Total != 5 {
+		t.Errorf("films of widow by rating: %q (total %d)", got, res.Total)
+	}
+	res, err = st.ListItems(context.Background(), ListOpts{Type: "movie", Query: "?!", Sort: "rating"})
+	if err != nil || len(res.Items) != 0 {
+		t.Errorf("marks alone: %+v %v", res.Items, err)
+	}
+}
