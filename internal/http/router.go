@@ -69,9 +69,13 @@ func NewRouter(cfg config.Config, st *store.Store, verifier *auth.Verifier) (htt
 	// a BFF passes) is served only what the cap allows, on every route.
 	api.Use(capped)
 
-	// Cross-type browse + global search. `?q=` runs the FTS query
-	// against the items.search_vector tsvector column; the other
-	// params are filter clauses.
+	// One search of the catalog: films, series and episodes ranked together
+	// by how they match the query, and the people whose names match it.
+	api.Get("/search", items.Search)
+	// Cross-type browse. `?q=` matches a title, a series' other name or a
+	// plot; on a type's list below, a query without a filter or an order of
+	// its own is ranked as /search ranks it. The other params are filter
+	// clauses.
 	api.Get("/items", items.List)
 	// Type-clamped browse — what chino-api / tv-api / musig-api hit
 	// for their library shelves. Same parameter set as /items; the
