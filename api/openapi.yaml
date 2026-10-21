@@ -67,7 +67,7 @@ paths:
         - $ref: "#/components/parameters/MaxRating"
         - in: query
           name: q
-          description: The query. A blank one finds nothing.
+          description: The query, read up to its 200th character. A blank one finds nothing.
           schema:
             type: string
           example: widows bay

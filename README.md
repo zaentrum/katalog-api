@@ -46,7 +46,7 @@ and "spiderman" "Spider-Man".
 Within a tier: how close the title is to the query (trigram similarity; a
 typo by the word similarity it was found by), then the rating, then the
 title. A query shorter than three characters reads the beginnings of titles
-alone (tiers 1–2). A search ranks at most a few times the limit of each kind
+alone (tiers 1–2); a query is read up to its 200th character. A search ranks at most a few times the limit of each kind
 of candidate (the shortest titles first), so a query that matches thousands
 of titles ranks only the best of them.
 
