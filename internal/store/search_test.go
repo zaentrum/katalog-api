@@ -167,6 +167,9 @@ func TestGoldenSearches(t *testing.T) {
 		{why: "an episode's title: the episode", q: "ozymandias", want: "bb-ozymandias:exact"},
 		{why: "an episode after the films and series", q: "widow", want: "widows-bay:prefix black-widow:words wb-pilot:words"},
 		{why: "nothing", q: "zzyzx", types: films, want: ""},
+		{why: "a query far longer than a title is read as its beginning", q: "Black Widow " + strings.Repeat("x", 500),
+			types: films, want: ""},
+		{why: "... which is the title", q: "black widow" + strings.Repeat(" ", 300) + "zzz", types: films, want: "black-widow:exact"},
 		{why: "marks alone", q: "?!", types: films, want: ""},
 	} {
 		got := search(t, st, c.q, c.types...)

@@ -189,14 +189,22 @@ type searchQuery struct {
 // by: a search then reads their beginnings alone.
 func (q searchQuery) short() bool { return utf8.RuneCountInString(q.text) < minWordsQuery }
 
-// normalize reads q as 049's functions do. Its tsquery holds the words as
-// to_tsvector('simple') splits the normalized text, the way the indexes hold
-// a title's, each a prefix; empty when q has no word.
+// maxQuery is how many characters of a query a search reads: a long title
+// is some seventy, and a query far longer is no title.
+const maxQuery = 200
+
+// normalize reads q, its first maxQuery characters, as 049's functions do. Its
+// tsquery holds the words as to_tsvector('simple') splits the normalized
+// text, the way the indexes hold a title's, each a prefix; empty when q has
+// no word.
 func (s *Store) normalize(ctx context.Context, q string) (searchQuery, error) {
 	var (
 		out    searchQuery
 		qt, qj *string
 	)
+	if utf8.RuneCountInString(q) > maxQuery {
+		q = string([]rune(q)[:maxQuery])
+	}
 	err := s.Pool.QueryRow(ctx, `
 		SELECT t, j,
 		       (SELECT string_agg(quote_literal(l) || ':*', ' & ')
