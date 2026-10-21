@@ -10,12 +10,17 @@ jobs:
     runs-on: ubuntu-latest
     # The store and handler tests run against a real PostgreSQL, with the
     # contrib extensions the catalog uses (unaccent, pg_trgm): among them the
-    # search's golden queries.
+    # search's golden queries. The tests make read-only roles of their own
+    # (CREATE ROLE … LOGIN, no password) to check what the API does when a
+    # column is not granted, and sign in as them; the image asks for a
+    # password over TCP by default, so this throwaway database trusts every
+    # connection, as a local test database does.
     services:
       postgres:
         image: postgres:16
         env:
           POSTGRES_PASSWORD: postgres
+          POSTGRES_HOST_AUTH_METHOD: trust
         ports:
           - 5432:5432
         options: >-
