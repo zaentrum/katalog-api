@@ -32,6 +32,9 @@ func (s *Store) ListItems(ctx context.Context, opts ListOpts) (ListResult, error
 	if opts.Offset < 0 {
 		opts.Offset = 0
 	}
+	if ranked(opts) {
+		return s.listRanked(ctx, opts)
+	}
 
 	var (
 		args   []any
@@ -45,12 +48,46 @@ func (s *Store) ListItems(ctx context.Context, opts ListOpts) (ListResult, error
 	if opts.Type != "" {
 		wheres = append(wheres, "i.type = "+add(opts.Type))
 	}
+	// A query with a filter or an order of its own matches a title by its
+	// title, a series' other name or its plot: as a search reads them where
+	// katalog-manager's migration 049 is in place (search.go), else by the
+	// catalog's search_vector (a generated column of the title, sort title
+	// and description; websearch_to_tsquery: "the dark knight"
+	// matches both words, "+dark -knight" honours +/- prefixes), else by the
+	// title's text.
+	var searched *searchQuery
 	if opts.Query != "" {
-		// Postgres FTS via the `search_vector` tsvector column that
-		// migration NN added on the items table. websearch_to_tsquery
-		// is the user-friendly variant: "the dark knight" matches both
-		// words, "+dark -knight" honours +/- prefixes.
-		wheres = append(wheres, "i.search_vector @@ websearch_to_tsquery('simple', "+add(opts.Query)+")")
+		ready, other, _, err := s.searchReady(ctx)
+		if err != nil {
+			return ListResult{}, err
+		}
+		has, err := s.columns(ctx, "com_nalet_katalog_items", "search_vector")
+		if err != nil {
+			return ListResult{}, err
+		}
+		switch {
+		case ready:
+			q, err := s.normalize(ctx, opts.Query)
+			if err != nil {
+				return ListResult{}, err
+			}
+			searched = &q
+			if q.tsquery == "" {
+				wheres = append(wheres, "false")
+				break
+			}
+			tq := add(q.tsquery) + "::tsquery"
+			match := "com_nalet_katalog_search_words(i.title) @@ " + tq +
+				" OR com_nalet_katalog_search_plot(i.description) @@ " + tq
+			if other {
+				match += " OR (i.scantitle IS NOT NULL AND com_nalet_katalog_search_words(i.scantitle) @@ " + tq + ")"
+			}
+			wheres = append(wheres, "("+match+")")
+		case has["search_vector"]:
+			wheres = append(wheres, "i.search_vector @@ websearch_to_tsquery('simple', "+add(opts.Query)+")")
+		default:
+			wheres = append(wheres, "i.title ILIKE '%' || "+add(opts.Query)+" || '%'")
+		}
 	}
 	if opts.YearMin != nil {
 		wheres = append(wheres, "i.year >= "+add(*opts.YearMin))
@@ -138,13 +175,24 @@ func (s *Store) ListItems(ctx context.Context, opts ListOpts) (ListResult, error
 	// a band-aid that couldn't see better matches on later pages). Ranking
 	// here fixes every client at once and is correct across the whole set.
 	if opts.Query != "" && (opts.Sort == "" || opts.Sort == "title") {
-		qExact := add(opts.Query)
-		qPrefix := add(opts.Query + "%")
-		qRank := add(opts.Query)
-		orderBy = "CASE WHEN lower(i.title) = lower(" + qExact + ") THEN 0 " +
-			"WHEN i.title ILIKE " + qPrefix + " THEN 1 ELSE 2 END, " +
-			"ts_rank_cd(i.search_vector, websearch_to_tsquery('simple', " + qRank + ")) DESC, " +
-			"i.sorttitle ASC NULLS LAST, i.id ASC"
+		if searched != nil {
+			n := add(searched.text)
+			orderBy = "CASE WHEN com_nalet_katalog_search_text(i.title) = " + n + " THEN 0 " +
+				"WHEN com_nalet_katalog_search_text(i.title) LIKE " + n + " || '%' THEN 1 ELSE 2 END, " +
+				"i.sorttitle ASC NULLS LAST, i.id ASC"
+		} else {
+			qExact := add(opts.Query)
+			qPrefix := add(opts.Query + "%")
+			rank := "0"
+			if has, err := s.columns(ctx, "com_nalet_katalog_items", "search_vector"); err != nil {
+				return ListResult{}, err
+			} else if has["search_vector"] {
+				rank = "ts_rank_cd(i.search_vector, websearch_to_tsquery('simple', " + add(opts.Query) + "))"
+			}
+			orderBy = "CASE WHEN lower(i.title) = lower(" + qExact + ") THEN 0 " +
+				"WHEN i.title ILIKE " + qPrefix + " THEN 1 ELSE 2 END, " +
+				rank + " DESC, i.sorttitle ASC NULLS LAST, i.id ASC"
+		}
 	}
 
 	// Genre filter is an EXISTS subquery (not a JOIN), so each item row
@@ -177,6 +225,41 @@ func (s *Store) ListItems(ctx context.Context, opts ListOpts) (ListResult, error
 		return ListResult{}, err
 	}
 	return ListResult{Items: items, Total: total, Limit: opts.Limit, Offset: opts.Offset}, nil
+}
+
+// ranked reports whether a list is a search ranked as /search ranks it: a
+// query among films, series or episodes, by relevance (no order of its own,
+// or title's, the default), with no filter.
+func ranked(opts ListOpts) bool {
+	if opts.Query == "" || (opts.Sort != "" && opts.Sort != "title") || opts.Genre != "" ||
+		opts.YearMin != nil || opts.YearMax != nil || opts.RatingMin != nil {
+		return false
+	}
+	for _, t := range SearchTypes {
+		if opts.Type == t {
+			return true
+		}
+	}
+	return false
+}
+
+// maxRankedList is how far a list ranked as a search reaches: its offset and
+// its limit together.
+const maxRankedList = 400
+
+// listRanked is a list that is a search (ranked): the page of the search's
+// titles of the list's type, in its order, and its total.
+func (s *Store) listRanked(ctx context.Context, opts ListOpts) (ListResult, error) {
+	res, err := s.searchItems(ctx, SearchOpts{Query: opts.Query, Types: []string{opts.Type}},
+		min(opts.Offset+opts.Limit, maxRankedList))
+	if err != nil {
+		return ListResult{}, err
+	}
+	items := []Item{}
+	if opts.Offset < len(res.Items) {
+		items = res.Items[opts.Offset:]
+	}
+	return ListResult{Items: items, Total: res.Total, Limit: opts.Limit, Offset: opts.Offset}, nil
 }
 
 // =============================================================================
