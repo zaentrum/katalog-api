@@ -62,6 +62,15 @@ type Item struct {
 	// Roles is set on a person's filmography only (GET /people/{id}): the
 	// person's roles on this item, in credit-list order.
 	Roles []string `json:"roles,omitempty"`
+
+	// Match is set on a search's titles only (search.go): how the title
+	// matched the query, its tier: exact, prefix, words, alternative (a
+	// series' other name), similar (a typo) or plot. An episode is ranked
+	// after every film and series its match would put it beside.
+	Match string `json:"match,omitempty"`
+	// Series is set on an episode a search found: its series, and whether
+	// the series matched the query by its own title in the same search.
+	Series *SearchSeries `json:"series,omitempty"`
 }
 
 // CastEntry mirrors chino-api's CastEntry: one credit from the (people,

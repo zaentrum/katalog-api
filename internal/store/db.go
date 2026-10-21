@@ -27,6 +27,10 @@ type Store struct {
 	// unrated is the catalog's setting that says whether a capped viewer is
 	// served unrated titles, as last read (ratings.go).
 	unrated unratedPolicy
+
+	// search is what the store has learnt of katalog-manager's migration 049,
+	// which the ranked search reads (search.go).
+	search searchCatalog
 }
 
 // ErrNotFound is returned when an item or asset does not exist.

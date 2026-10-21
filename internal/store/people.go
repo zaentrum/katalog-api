@@ -22,6 +22,10 @@ type Person struct {
 	Name       string `json:"name"`
 	Credits    int    `json:"credits,omitempty"`
 	HasProfile bool   `json:"has_profile"`
+	// Match is set by a search (SearchPeopleRanked) only: how the name
+	// matched the query, exact, prefix, words, alternative (another name the
+	// person is known by) or similar (a typo).
+	Match string `json:"match,omitempty"`
 }
 
 // PersonDetail is a person, what the catalog knows about them (migration
