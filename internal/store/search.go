@@ -378,33 +378,36 @@ func (s *Store) searchItems(ctx context.Context, opts SearchOpts, limit int) (Se
 		sql.WriteString(`SELECT NULL::varchar AS id WHERE false`)
 	}
 	// Each candidate's tier: how its title matched (match), whether it is an
-	// episode, and how close the title is.
+	// episode, and how close the title is. Its title is normalized once a row
+	// (normed, matched are materialized: the planner would compute an
+	// expression of a subquery once for each place it is named).
 	sql.WriteString(`),
 		cand AS (
 			SELECT id, 0 AS via FROM pre
 			UNION ALL SELECT id, 1 FROM typos
 			UNION ALL SELECT id, 2 FROM plot),
-		tiered AS (
-			SELECT c.id, m.match,
-			       CASE WHEN m.match = 'plot' THEN 7 WHEN m.match = 'similar' THEN 6 WHEN i.type = 'episode' THEN 5
-			            WHEN m.match = 'exact' THEN 1 WHEN m.match = 'prefix' THEN 2 WHEN m.match = 'words' THEN 3
-			            ELSE 4 END AS tier,
-			       CASE WHEN m.match IN ('plot', 'similar') THEN (i.type = 'episode')::int
-			            WHEN i.type <> 'episode' THEN 0
-			            WHEN m.match = 'exact' THEN 1 WHEN m.match = 'prefix' THEN 2 ELSE 3 END AS sub,
-			       CASE WHEN c.via = 1 THEN strict_word_similarity($1, x.t)
-			            WHEN c.via = 2 THEN 0 ELSE similarity(x.t, $1) END AS sim,
-			       i.rating, i.title
-			FROM cand c JOIN com_nalet_katalog_items i ON i.id = c.id,
-			LATERAL (SELECT com_nalet_katalog_search_text(i.title) AS t, com_nalet_katalog_search_joined(i.title) AS j) x,
-			LATERAL (SELECT CASE WHEN c.via = 2 THEN 'plot' WHEN c.via = 1 THEN 'similar'
-			                     WHEN x.t = $1 OR x.j = $2 THEN 'exact'
-			                     WHEN x.t LIKE $1 || '%' OR x.j LIKE $2 || '%' OR x.t ~ $9 THEN 'prefix'
-			                     WHEN c.id IN (SELECT id FROM words) THEN 'words'
-			                     ELSE 'alternative' END AS match) m),
+		normed AS MATERIALIZED (
+			SELECT c.id, c.via, i.type, i.rating, i.title,
+			       com_nalet_katalog_search_text(i.title) AS t, com_nalet_katalog_search_joined(i.title) AS j
+			FROM cand c JOIN com_nalet_katalog_items i ON i.id = c.id),
+		matched AS MATERIALIZED (
+			SELECT n.id, n.type, n.rating, n.title,
+			       CASE WHEN n.via = 2 THEN 'plot' WHEN n.via = 1 THEN 'similar'
+			            WHEN n.t = $1 OR n.j = $2 THEN 'exact'
+			            WHEN n.t LIKE $1 || '%' OR n.j LIKE $2 || '%' OR n.t ~ $9 THEN 'prefix'
+			            WHEN n.id IN (SELECT id FROM words) THEN 'words'
+			            ELSE 'alternative' END AS match,
+			       CASE WHEN n.via = 1 THEN strict_word_similarity($1, n.t)
+			            WHEN n.via = 2 THEN 0 ELSE similarity(n.t, $1) END AS sim
+			FROM normed n),
 		ranked AS (
-			SELECT id, match, row_number() OVER (ORDER BY tier, sub, sim DESC, rating DESC NULLS LAST, title, id) AS ord
-			FROM tiered ORDER BY ord LIMIT $6),
+			SELECT id, match, row_number() OVER (ORDER BY
+			         CASE WHEN match = 'plot' THEN 7 WHEN match = 'similar' THEN 6 WHEN type = 'episode' THEN 5
+			              WHEN match = 'exact' THEN 1 WHEN match = 'prefix' THEN 2 WHEN match = 'words' THEN 3 ELSE 4 END,
+			         CASE WHEN match IN ('plot', 'similar') THEN (type = 'episode')::int WHEN type <> 'episode' THEN 0
+			              WHEN match = 'exact' THEN 1 WHEN match = 'prefix' THEN 2 ELSE 3 END,
+			         sim DESC, rating DESC NULLS LAST, title, id) AS ord
+			FROM matched ORDER BY ord LIMIT $6),
 		hits AS (SELECT id FROM words UNION SELECT id FROM other UNION SELECT id FROM typos)`)
 
 	total, items, err := s.searchPage(ctx, sql.String(), `(SELECT n FROM found) + (SELECT count(*) FROM typos) + (SELECT count(*) FROM plot)`, args)
@@ -631,20 +634,22 @@ func (s *Store) SearchPeopleRanked(ctx context.Context, query string, limit int)
 		credited AS (
 			SELECT c.id, min(c.via) AS via, count(DISTINCT ip.item_id) AS credits ` + credits + `
 			GROUP BY c.id),
-		tiered AS (
-			SELECT p.id, p.name, c.credits, m.match,
-			       CASE m.match WHEN 'exact' THEN 1 WHEN 'prefix' THEN 2 WHEN 'words' THEN 3
-			            WHEN 'alternative' THEN 4 ELSE 5 END AS tier,
-			       CASE WHEN c.via = 2 THEN strict_word_similarity($1, x.t) ELSE similarity(x.t, $1) END AS sim
-			FROM credited c JOIN com_nalet_katalog_people p ON p.id = c.id,
-			LATERAL (SELECT com_nalet_katalog_search_text(p.name) AS t, com_nalet_katalog_search_joined(p.name) AS j) x,
-			LATERAL (SELECT CASE WHEN c.via = 2 THEN 'similar' WHEN c.via = 1 THEN 'alternative'
-			                     WHEN x.t = $1 OR x.j = $2 THEN 'exact'
-			                     WHEN x.t LIKE $1 || '%' OR x.j LIKE $2 || '%' OR x.t ~ $8 THEN 'prefix'
-			                     ELSE 'words' END AS match) m)
+		normed AS MATERIALIZED (
+			SELECT c.id, c.via, c.credits, p.name,
+			       com_nalet_katalog_search_text(p.name) AS t, com_nalet_katalog_search_joined(p.name) AS j
+			FROM credited c JOIN com_nalet_katalog_people p ON p.id = c.id),
+		tiered AS MATERIALIZED (
+			SELECT n.id, n.name, n.credits,
+			       CASE WHEN n.via = 2 THEN 'similar' WHEN n.via = 1 THEN 'alternative'
+			            WHEN n.t = $1 OR n.j = $2 THEN 'exact'
+			            WHEN n.t LIKE $1 || '%' OR n.j LIKE $2 || '%' OR n.t ~ $8 THEN 'prefix'
+			            ELSE 'words' END AS match,
+			       CASE WHEN n.via = 2 THEN strict_word_similarity($1, n.t) ELSE similarity(n.t, $1) END AS sim
+			FROM normed n)
 		SELECT t.id, t.name, t.credits::int, ` + strings.ReplaceAll(profile, "p.id", "t.id") + `, t.match
 		FROM tiered t
-		ORDER BY t.tier, t.credits DESC, t.sim DESC, t.name, t.id
+		ORDER BY CASE t.match WHEN 'exact' THEN 1 WHEN 'prefix' THEN 2 WHEN 'words' THEN 3 WHEN 'alternative' THEN 4 ELSE 5 END,
+		         t.credits DESC, t.sim DESC, t.name, t.id
 		LIMIT $5`)
 	rows, err := s.Pool.Query(ctx, sql.String(), append([]any{pgx.QueryExecModeCacheDescribe}, args...)...)
 	if err != nil {
