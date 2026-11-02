@@ -85,6 +85,19 @@ func (h *ItemsHandler) SubtitleAsset(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, a)
 }
 
+// FontAsset resolves a font id (from the item detail's fonts[]) → its file
+// on the share, its format and the item whose package holds it, as
+// SubtitleAsset does a subtitle: the stream services open the font file
+// themselves.
+func (h *ItemsHandler) FontAsset(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	a, err := h.Store.FontAsset(r.Context(), id)
+	if writeStoreErr(w, r, "font asset", err) {
+		return
+	}
+	writeJSON(w, http.StatusOK, a)
+}
+
 // Genres returns the catalogue-wide genre name list, alphabetically sorted.
 // Used by chino-web's browse filter chips so the picker shows real values.
 func (h *ItemsHandler) Genres(w http.ResponseWriter, r *http.Request) {

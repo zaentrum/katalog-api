@@ -42,6 +42,10 @@ func NewRouter(cfg config.Config, st *store.Store, verifier *auth.Verifier) (htt
 	// an on-disk path so they can serve the .vtt straight off the packages
 	// PVC instead of round-tripping the bytes through katalog-api.
 	r.Get("/api/v1/subtitles/{id}/asset", items.SubtitleAsset)
+	// Same trust model for a font of a package (from the item detail's
+	// fonts[]): the stream services resolve its id into its file, which a
+	// player that draws styled subtitles loads.
+	r.Get("/api/v1/fonts/{id}/asset", items.FontAsset)
 	// Same trust model for where the stream services play from: an item's
 	// package (the version complete now, or a package from before the
 	// library), the superseded versions a running session may finish on, and
