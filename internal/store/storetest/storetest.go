@@ -122,6 +122,20 @@ func (db *DB) Migrate038(t testing.TB) {
   ADD COLUMN IF NOT EXISTS isforced BOOLEAN NOT NULL DEFAULT false`)
 }
 
+// Migrate053 adds what migration 053 adds: the styled original a package
+// keeps beside a subtitle's file, and the fonts the package carries.
+func (db *DB) Migrate053(t testing.TB) {
+	t.Helper()
+	db.Exec(t, `ALTER TABLE com_nalet_katalog_subtitleassets
+  ADD COLUMN IF NOT EXISTS styledpath VARCHAR(2048),
+  ADD COLUMN IF NOT EXISTS styledformat VARCHAR(16)`)
+	db.Exec(t, `CREATE TABLE IF NOT EXISTS com_nalet_katalog_fontassets (
+  id VARCHAR(36) NOT NULL PRIMARY KEY, item_id VARCHAR(36) NOT NULL, versionid VARCHAR(36),
+  path VARCHAR(2048) NOT NULL, format VARCHAR(16), names JSONB NOT NULL DEFAULT '[]'::jsonb,
+  ordinal INTEGER NOT NULL, sourcestreamindex INTEGER, createdat TIMESTAMPTZ NOT NULL DEFAULT now()
+)`)
+}
+
 // Migrate039 adds what migration 039 adds: a movie's or a series' extras, one
 // row per extra, with what a viewer is shown of it and its package.
 func (db *DB) Migrate039(t testing.TB) {
