@@ -13,8 +13,9 @@ import (
 // Playback answers where an item's package and its original are: GET
 // /api/v1/items/{id}/playback. The package that plays (its folder, the
 // version it is, the record to read it by), the superseded versions a running
-// session may still be served from, the one superseded last first, and the
-// file it was taken in from while there is one. 404 for an id of no item.
+// session may still be served from, the one superseded last first, the file it
+// was taken in from while there is one, and the part of the frame its picture
+// fills when bars were measured in what it plays. 404 for an id of no item.
 func (h *ItemsHandler) Playback(w http.ResponseWriter, r *http.Request) {
 	p, err := h.Store.Playback(r.Context(), chi.URLParam(r, "id"))
 	if writeStoreErr(w, r, "playback", err) {
@@ -25,8 +26,9 @@ func (h *ItemsHandler) Playback(w http.ResponseWriter, r *http.Request) {
 
 // ExtraPlayback answers where an extra's package is: GET
 // /api/v1/extras/{extraId}/playback, its folder, the record to read it by, the
-// title it belongs to and when it was packaged. 404 unless the extra is
-// packaged and not removed.
+// title it belongs to, when it was packaged, and the part of the frame its
+// picture fills when bars were measured in its package. 404 unless the extra
+// is packaged and not removed.
 func (h *ItemsHandler) ExtraPlayback(w http.ResponseWriter, r *http.Request) {
 	x, err := h.Store.ExtraPlayback(r.Context(), chi.URLParam(r, "extraId"))
 	if writeStoreErr(w, r, "extra playback", err) {

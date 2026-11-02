@@ -139,3 +139,65 @@ func TestPlaybackOnTheWire(t *testing.T) {
 		check("in the library", path, 404, "not found")
 	}
 }
+
+// The picture area on the wire, after the playback answers' other keys: a
+// film's, measured of the original its complete version was made of, and an
+// extra's, of its package. A film whose picture fills its frame is sent
+// without one, key for key as before.
+func TestThePictureAreaOnTheWire(t *testing.T) {
+	db := storetest.Open(t)
+	db.Migrate054(t)
+	h := router(t, &store.Store{Pool: db.Pool})
+	const (
+		film   = "f001aeff-9c18-4183-b51b-51403af2515e"
+		other  = "ea886f9b-0d06-4f0f-babb-d2a1162f9b01"
+		extra  = "2b7c9e10-3d4f-4a5b-8c6d-7e8f9a0b1c2d"
+		v2     = "9a2e4f60-1b2c-4d3e-8f4a-5b6c7d8e9f00"
+		w1     = "c3d4e5f6-0718-4293-a4b5-c6d7e8f90a1b"
+		source = "0b6c6a52-8d1e-4f3a-9b2c-1d4e5f6a7b8c"
+	)
+	fdir, odir := "/var/lib/katalog/movies/f0/"+film, "/var/lib/katalog/movies/ea/"+other
+	db.Exec(t, `INSERT INTO com_nalet_katalog_items (id, type, title) VALUES ($1, 'movie', 'Sintel'), ($2, 'movie', 'Tears of Steel')`,
+		film, other)
+	db.Exec(t, `INSERT INTO com_nalet_katalog_itemversions (id, item_id, sourceids, state, packageid, dir, completedat) VALUES
+		($1, $2, $3,   'complete', 'p2', $4, '2026-10-06 09:00:00+00'),
+		($5, $6, '{}', 'complete', 'p3', $7, '2026-10-06 10:00:00+00')`,
+		v2, film, []string{source}, fdir+"/versions/"+v2, w1, other, odir+"/versions/"+w1)
+	db.Exec(t, `INSERT INTO com_nalet_katalog_playbackassets (id, item_id, path, isprimary, kind, sourceid, versionid) VALUES
+		('a1', $1, '/var/lib/katalog/.work/incoming/Sintel (2010).mkv', true, 'primary', $2, NULL),
+		('a2', $1, $3, false, 'packaged', NULL, $4),
+		('a3', $5, $6, false, 'packaged', NULL, $7)`,
+		film, source, fdir+"/versions/"+v2+"/package.json", v2, other, odir+"/versions/"+w1+"/package.json", w1)
+	db.Exec(t, `INSERT INTO com_nalet_katalog_itemextras (id, item_id, kind, title, registeredby, state, packagepath, packagedat,
+			packageid, recordedat)
+		VALUES ($1, $2, 'featurette', 'Making Of', 'api', 'ready', $3, '2026-10-06 11:00:00+00', 'p4', now())`,
+		extra, other, odir+"/extras/"+extra)
+	// The analyzer measured the film's original as it was taken in, and the
+	// other film's package and the extra's.
+	db.Exec(t, `INSERT INTO com_nalet_katalog_pictureareas
+			(id, kind, item_id, state, framewidth, frameheight, areax, areay, areawidth, areaheight, path, sourceid, versionid, packageid)
+		VALUES
+		($1, 'item',  $1, 'measured', 1920, 1080, 0, 138, 1920, 804,  '/var/lib/katalog/.work/incoming/Sintel (2010).mkv', $2, NULL, NULL),
+		($3, 'item',  $3, 'measured', 1920, 1080, 0, 0,   1920, 1080, $4, NULL, $5,   NULL),
+		($6, 'extra', $3, 'measured', 1920, 1080, 0, 132, 1920, 816,  $7, NULL, NULL, 'p4')`,
+		film, source, other, odir+"/versions/"+w1+"/hls/v0/playlist.m3u8", w1, extra, odir+"/extras/"+extra+"/hls/v0/playlist.m3u8")
+
+	for path, want := range map[string]string{
+		"/api/v1/items/" + film + "/playback": `{"itemId":"` + film + `","type":"movie",` +
+			`"package":{"versionId":"` + v2 + `","dir":"` + fdir + `/versions/` + v2 + `","record":"package.json","completedAt":"2026-10-06T09:00:00Z"},` +
+			`"previous":[],"original":{"path":"/var/lib/katalog/.work/incoming/Sintel (2010).mkv","sourceId":"` + source + `"},` +
+			`"pictureArea":{"frameWidth":1920,"frameHeight":1080,"x":0,"y":138,"width":1920,"height":804}}`,
+		"/api/v1/items/" + other + "/playback": `{"itemId":"` + other + `","type":"movie",` +
+			`"package":{"versionId":"` + w1 + `","dir":"` + odir + `/versions/` + w1 + `","record":"package.json","completedAt":"2026-10-06T10:00:00Z"},` +
+			`"previous":[],"original":null}`,
+		"/api/v1/extras/" + extra + "/playback": `{"extraId":"` + extra + `","itemId":"` + other + `",` +
+			`"dir":"` + odir + `/extras/` + extra + `","record":"package.json","packagedAt":"2026-10-06T11:00:00Z",` +
+			`"pictureArea":{"frameWidth":1920,"frameHeight":1080,"x":0,"y":132,"width":1920,"height":816}}`,
+	} {
+		code, body := serve(h, path, nil)
+		t.Logf("GET %s\n%s", path, body)
+		if code != 200 || body != want {
+			t.Errorf("GET %s:\n got %d %s\nwant 200 %s", path, code, body, want)
+		}
+	}
+}

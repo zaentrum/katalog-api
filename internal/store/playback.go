@@ -23,6 +23,20 @@ import (
 // Before 040, and for an item packaged before the library, the package is the
 // folder of the item's packaged asset (kind packaged), the package store's,
 // whose record is its manifest.json; it has no versions.
+//
+// Many sources keep a full frame with a wider picture letterboxed inside it,
+// black bars baked into the video, or a narrower one pillarboxed. The players
+// fit the picture's area to the screen rather than the frame, so the playback
+// answers say it. The analyzer measures it, and katalog-manager keeps it, a
+// movie, an episode or an extra a row (its migration 054,
+// com_nalet_katalog_pictureareas). A row is of the file it was measured in,
+// which the title may no longer play: its file replaced, an extra packaged
+// anew. The view com_nalet_katalog_currentpictureareas holds the rows that are
+// of what each title plays now, as katalog-manager decides it, and the area is
+// read from it alone: an item's row is of its complete version or of an
+// original the version was made of; that of an item without a complete
+// version, of its original or of its package from before the library; an
+// extra's, of its package.
 
 // The record a package's folder holds: a version's package.json, else the
 // package store's manifest.json.
@@ -38,17 +52,21 @@ const (
 // one superseded last first: a session started on one of them is served from
 // it until it ends. Original is the file the item was taken in from, while
 // there is one; nil once it was retired, and for an item without one.
+// PictureArea is the part of the frame its picture fills, as the analyzer
+// measured it of what the item plays now; omitted when it measured none there,
+// when the picture fills the whole frame, and for a series.
 //
 // A covered episode plays its holder's file (covers.go): CoveredBy names the
-// holder, and its package, previous versions and original are the holder's.
-// CoveredBy is omitted for every other item.
+// holder, and its package, previous versions, original and picture area are
+// the holder's. CoveredBy is omitted for every other item.
 type Playback struct {
-	ItemID    string       `json:"itemId"`
-	Type      string       `json:"type"`
-	CoveredBy string       `json:"coveredBy,omitempty"`
-	Package   *PackageRef  `json:"package"`
-	Previous  []PackageRef `json:"previous"`
-	Original  *Original    `json:"original"`
+	ItemID      string       `json:"itemId"`
+	Type        string       `json:"type"`
+	CoveredBy   string       `json:"coveredBy,omitempty"`
+	Package     *PackageRef  `json:"package"`
+	Previous    []PackageRef `json:"previous"`
+	Original    *Original    `json:"original"`
+	PictureArea *PictureArea `json:"pictureArea,omitempty"`
 }
 
 // holder is the item whose file p plays: the holder of a covered episode,
@@ -79,6 +97,63 @@ type Original struct {
 	SourceID *string `json:"sourceId"`
 }
 
+// PictureArea is the part of a video's frame its picture fills, in pixels of
+// the frame it was measured in: the frame as the video codes it, bars included
+// (FrameWidth, FrameHeight), and the picture's area in it from its top left
+// corner (X, Y, Width, Height), rounded outwards to even pixels. A picture
+// letterboxed in a 1920x1080 frame is as wide as the frame and less high
+// (1920x804 at y 138); one pillarboxed is as high and less wide.
+type PictureArea struct {
+	FrameWidth  int `json:"frameWidth"`
+	FrameHeight int `json:"frameHeight"`
+	X           int `json:"x"`
+	Y           int `json:"y"`
+	Width       int `json:"width"`
+	Height      int `json:"height"`
+}
+
+// pictureAreaColumns are the columns of com_nalet_katalog_currentpictureareas,
+// the view migration 054 creates, that a picture area is read from.
+var pictureAreaColumns = []string{"id", "kind", "state", "framewidth", "frameheight", "areax", "areay", "areawidth", "areaheight"}
+
+// pictureAreaOf returns the picture area of what id plays now, read from the
+// view of the rows that are of what each title plays: id is an item of kind
+// item (the item whose file plays, a covered episode's holder) or an extra of
+// kind extra. It is nil when no area is measured of what plays: a row pending,
+// unknown or failed says none, whatever it still holds from before (a measured
+// one holds all of its area, as the table's check requires; one without it
+// would be read as none all the same). It is nil too when the picture fills
+// the whole frame, as there are no bars to leave out; and on a catalog without
+// 054, or with a role that may not read the view yet (one created after the
+// read-only role was granted its tables), whose view is read as soon as it is
+// there and the role may read it, without a restart.
+func (s *Store) pictureAreaOf(ctx context.Context, kind, id string) (*PictureArea, error) {
+	has, err := s.columns(ctx, "com_nalet_katalog_currentpictureareas", pictureAreaColumns...)
+	if err != nil {
+		return nil, err
+	}
+	if !all(has, pictureAreaColumns...) {
+		return nil, nil
+	}
+	var a PictureArea
+	err = s.Pool.QueryRow(ctx, `
+		SELECT framewidth, frameheight, areax, areay, areawidth, areaheight
+		FROM com_nalet_katalog_currentpictureareas
+		WHERE id = $1 AND kind = $2 AND state = 'measured'
+		  AND num_nulls(framewidth, frameheight, areax, areay, areawidth, areaheight) = 0`,
+		id, kind).Scan(&a.FrameWidth, &a.FrameHeight, &a.X, &a.Y, &a.Width, &a.Height)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("picture area of %s %s: %w", kind, id, err)
+	}
+	if a.X == 0 && a.Y == 0 && a.Width == a.FrameWidth && a.Height == a.FrameHeight {
+		return nil, nil // the picture fills the frame
+	}
+	return &a, nil
+}
+
 // assetColumns040 are the columns migration 040 adds to a playback asset: the
 // source and the version it is of.
 var assetColumns040 = []string{"sourceid", "versionid"}
@@ -87,18 +162,20 @@ var assetColumns040 = []string{"sourceid", "versionid"}
 // migration 040 creates, that an item's versions are read from.
 var versionColumns = []string{"id", "item_id", "state", "dir", "completedat", "supersededat", "removedat"}
 
-// Playback returns where the item itemID's package and original are, or
-// ErrNotFound when the catalog holds no such item. It applies no rating cap:
-// the stream services ask it for what a stream token already authorizes. A
-// covered episode is answered its holder's package, previous versions and
-// original (covers.go), whatever it holds itself.
+// Playback returns where the item itemID's package and original are, and the
+// part of the frame its picture fills, or ErrNotFound when the catalog holds
+// no such item. It applies no rating cap: the stream services ask it for what
+// a stream token already authorizes. A covered episode is answered its
+// holder's package, previous versions, original and picture area (covers.go),
+// whatever it holds itself.
 //
 // On a catalog without migration 040, or with a role that may not read the
 // versions yet (a table created after the read-only role was granted its
 // tables), the package is the packaged asset's folder and there are no
 // previous versions; the versions are read as soon as the table is there and
 // the role may read it, without a restart. A packaged asset of a version is
-// its package.json, so its folder plays the same until then.
+// its package.json, so its folder plays the same until then. Without 054, or
+// while the role may not read its view, there is no picture area, likewise.
 func (s *Store) Playback(ctx context.Context, itemID string) (Playback, error) {
 	if s == nil || s.Pool == nil {
 		return Playback{}, ErrNoPool
@@ -167,6 +244,9 @@ func (s *Store) Playback(ctx context.Context, itemID string) (Playback, error) {
 	if p.Package == nil && pkgPath != nil {
 		p.Package = &PackageRef{VersionID: pkgVersion, Dir: path.Dir(*pkgPath), Record: recordOf(*pkgPath)}
 	}
+	if p.PictureArea, err = s.pictureAreaOf(ctx, "item", p.holder()); err != nil {
+		return Playback{}, err
+	}
 	return p, nil
 }
 
@@ -231,13 +311,16 @@ func recordOf(p string) string {
 // ExtraPlayback is where an extra's package is: its folder (Dir) and the
 // record in it (Record: package.json for an extra packaged into the library,
 // manifest.json for one in the package store), the title it belongs to
-// (ItemID), and when it was packaged.
+// (ItemID), and when it was packaged. PictureArea is the part of the frame its
+// picture fills, as the analyzer measured it of that package; omitted when it
+// measured none there, and when the picture fills the whole frame.
 type ExtraPlayback struct {
-	ExtraID    string    `json:"extraId"`
-	ItemID     string    `json:"itemId"`
-	Dir        string    `json:"dir"`
-	Record     string    `json:"record"`
-	PackagedAt time.Time `json:"packagedAt"`
+	ExtraID     string       `json:"extraId"`
+	ItemID      string       `json:"itemId"`
+	Dir         string       `json:"dir"`
+	Record      string       `json:"record"`
+	PackagedAt  time.Time    `json:"packagedAt"`
+	PictureArea *PictureArea `json:"pictureArea,omitempty"`
 }
 
 // extraPackageColumns are the columns of com_nalet_katalog_itemextras
@@ -248,10 +331,12 @@ var (
 	extraPackageColumns040 = []string{"id", "item_id", "packagepath", "packagedat", "removedat", "packageid"}
 )
 
-// ExtraPlayback returns where the extra extraID's package is. It is
-// ErrNotFound unless the extra is packaged and not removed (a hidden one, and
-// one whose original went missing, keep their package), as on a catalog
-// without migration 039 or with a role that may not read the extras.
+// ExtraPlayback returns where the extra extraID's package is, and the part of
+// the frame its picture fills. It is ErrNotFound unless the extra is packaged
+// and not removed (a hidden one, and one whose original went missing, keep
+// their package), as on a catalog without migration 039 or with a role that
+// may not read the extras. Without 054, or while the role may not read its
+// view, there is no picture area.
 func (s *Store) ExtraPlayback(ctx context.Context, extraID string) (ExtraPlayback, error) {
 	if s == nil || s.Pool == nil {
 		return ExtraPlayback{}, ErrNoPool
@@ -286,6 +371,9 @@ func (s *Store) ExtraPlayback(ctx context.Context, extraID string) (ExtraPlaybac
 	x.Record = recordManifest
 	if pid != nil {
 		x.Record = recordPackage
+	}
+	if x.PictureArea, err = s.pictureAreaOf(ctx, "extra", x.ExtraID); err != nil {
+		return ExtraPlayback{}, err
 	}
 	return x, nil
 }
