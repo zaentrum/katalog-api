@@ -77,6 +77,11 @@ type SubtitleAssetInfo struct {
 	Path   string `json:"path"`
 	Format string `json:"format,omitempty"`
 	Lang   string `json:"lang,omitempty"`
+	// StyledPath and StyledFormat are the styled original the package keeps
+	// beside the subtitle's file (migration 053): empty for a subtitle
+	// without one, and on a catalog without it.
+	StyledPath   string `json:"styledPath,omitempty"`
+	StyledFormat string `json:"styledFormat,omitempty"`
 }
 
 // SubtitleAsset returns the disk path + format for one subtitle id.
@@ -88,13 +93,56 @@ func (s *Store) SubtitleAsset(ctx context.Context, subID string) (SubtitleAssetI
 	if s == nil || s.Pool == nil {
 		return SubtitleAssetInfo{}, ErrNoPool
 	}
+	has, err := s.columns(ctx, "com_nalet_katalog_subtitleassets", "styledpath", "styledformat")
+	if err != nil {
+		return SubtitleAssetInfo{}, err
+	}
+	styled := `'', ''`
+	if all(has, "styledpath", "styledformat") {
+		styled = `COALESCE(styledpath, ''), COALESCE(styledformat, '')`
+	}
 	var a SubtitleAssetInfo
-	err := s.Pool.QueryRow(ctx,
-		`SELECT item_id, path, COALESCE(format,''), COALESCE(lang,'')
+	err = s.Pool.QueryRow(ctx,
+		`SELECT item_id, path, COALESCE(format,''), COALESCE(lang,''), `+styled+`
 		 FROM com_nalet_katalog_subtitleassets
-		 WHERE id = $1`, subID).Scan(&a.ItemID, &a.Path, &a.Format, &a.Lang)
+		 WHERE id = $1`, subID).Scan(&a.ItemID, &a.Path, &a.Format, &a.Lang, &a.StyledPath, &a.StyledFormat)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return SubtitleAssetInfo{}, ErrNotFound
+	}
+	return a, err
+}
+
+// FontAssetInfo is a font file of a package as the stream services serve it:
+// the item whose package holds it, its path and its format.
+type FontAssetInfo struct {
+	ItemID string `json:"itemId"`
+	Path   string `json:"path"`
+	Format string `json:"format,omitempty"`
+}
+
+// fontColumns are the columns of katalog-manager's migration 053 table of a
+// package's fonts that this service reads.
+var fontColumns = []string{"id", "item_id", "path", "format", "names", "ordinal"}
+
+// FontAsset resolves a font's id (from the item detail's fonts[]) to its file
+// on the share, as SubtitleAsset does a subtitle's. ErrNotFound for an id
+// there is none of, and on a catalog without the fonts (migration 053).
+func (s *Store) FontAsset(ctx context.Context, fontID string) (FontAssetInfo, error) {
+	if s == nil || s.Pool == nil {
+		return FontAssetInfo{}, ErrNoPool
+	}
+	has, err := s.columns(ctx, "com_nalet_katalog_fontassets", fontColumns...)
+	if err != nil {
+		return FontAssetInfo{}, err
+	}
+	if !all(has, fontColumns...) {
+		return FontAssetInfo{}, ErrNotFound
+	}
+	var a FontAssetInfo
+	err = s.Pool.QueryRow(ctx, `SELECT item_id, path, COALESCE(format, '')
+		FROM com_nalet_katalog_fontassets WHERE id = $1`, fontID).Scan(&a.ItemID, &a.Path, &a.Format)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return FontAssetInfo{}, ErrNotFound
 	}
 	return a, err
 }

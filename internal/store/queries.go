@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -523,6 +524,11 @@ func (s *Store) GetItemWithIncludes(ctx context.Context, id string, inc IncludeO
 			return Item{}, err
 		}
 		it.Subtitles = ss
+		fs, err := s.listFontsFor(ctx, file)
+		if err != nil {
+			return Item{}, err
+		}
+		it.Fonts = fs
 	}
 	if inc.Trailers {
 		ts, err := s.listTrailersFor(ctx, id)
@@ -791,7 +797,9 @@ func (s *Store) listPeopleFor(ctx context.Context, itemID string) ([]CastEntry, 
 // item. `default` defaults to false in SQL — no need to COALESCE.
 func (s *Store) listSubtitlesFor(ctx context.Context, itemID string) ([]Subtitle, error) {
 	// isforced is katalog-manager's migration 038; before it, none is forced.
-	has, err := s.columns(ctx, "com_nalet_katalog_subtitleassets", "isforced")
+	// styledpath and styledformat are 053's; before it, none has a styled
+	// original.
+	has, err := s.columns(ctx, "com_nalet_katalog_subtitleassets", "isforced", "styledpath", "styledformat")
 	if err != nil {
 		return nil, err
 	}
@@ -799,10 +807,14 @@ func (s *Store) listSubtitlesFor(ctx context.Context, itemID string) ([]Subtitle
 	if has["isforced"] {
 		forced = "COALESCE(isforced, false)"
 	}
+	styled := "''"
+	if all(has, "styledpath", "styledformat") {
+		styled = "CASE WHEN styledpath IS NOT NULL THEN COALESCE(styledformat, '') ELSE '' END"
+	}
 	rows, err := s.Pool.Query(ctx, `
 		SELECT id,
 		       COALESCE(lang, ''), COALESCE(label, ''),
-		       COALESCE(format, ''), COALESCE(isdefault, false), `+forced+`
+		       COALESCE(format, ''), COALESCE(isdefault, false), `+forced+`, `+styled+`
 		FROM com_nalet_katalog_subtitleassets
 		WHERE item_id = $1
 		ORDER BY isdefault DESC, lang, id`, itemID)
@@ -813,10 +825,42 @@ func (s *Store) listSubtitlesFor(ctx context.Context, itemID string) ([]Subtitle
 	out := []Subtitle{}
 	for rows.Next() {
 		var s Subtitle
-		if err := rows.Scan(&s.ID, &s.Lang, &s.Label, &s.Format, &s.Default, &s.Forced); err != nil {
+		if err := rows.Scan(&s.ID, &s.Lang, &s.Label, &s.Format, &s.Default, &s.Forced, &s.StyledFormat); err != nil {
 			return nil, err
 		}
 		out = append(out, s)
+	}
+	return out, rows.Err()
+}
+
+// listFontsFor returns the fonts of the package the item plays, in their
+// order (katalog-manager's migration 053): none on a catalog without them, or
+// whose table this role may not read.
+func (s *Store) listFontsFor(ctx context.Context, itemID string) ([]Font, error) {
+	has, err := s.columns(ctx, "com_nalet_katalog_fontassets", fontColumns...)
+	if err != nil {
+		return nil, err
+	}
+	if !all(has, fontColumns...) {
+		return nil, nil
+	}
+	rows, err := s.Pool.Query(ctx, `SELECT id, COALESCE(format, ''), COALESCE(names, '[]'::jsonb)
+		FROM com_nalet_katalog_fontassets WHERE item_id = $1 ORDER BY ordinal, id`, itemID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Font
+	for rows.Next() {
+		var f Font
+		var names []byte
+		if err := rows.Scan(&f.ID, &f.Format, &names); err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal(names, &f.Names); err != nil || f.Names == nil {
+			f.Names = []string{}
+		}
+		out = append(out, f)
 	}
 	return out, rows.Err()
 }

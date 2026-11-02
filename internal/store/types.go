@@ -55,9 +55,13 @@ type Item struct {
 	Genres    []string    `json:"genres,omitempty"`
 	Cast      []CastEntry `json:"cast,omitempty"`
 	Subtitles []Subtitle  `json:"subtitles,omitempty"`
-	Trailers  []Trailer   `json:"trailers,omitempty"`
-	Extras    []Extra     `json:"extras,omitempty"`
-	Segments  *SegSummary `json:"segments,omitempty"`
+	// Fonts are the fonts of the package the item plays, which its styled
+	// subtitles are drawn with (katalog-manager's migration 053), in their
+	// order; given with the subtitles, and none of a catalog without them.
+	Fonts    []Font      `json:"fonts,omitempty"`
+	Trailers []Trailer   `json:"trailers,omitempty"`
+	Extras   []Extra     `json:"extras,omitempty"`
+	Segments *SegSummary `json:"segments,omitempty"`
 
 	// Roles is set on a person's filmography only (GET /people/{id}): the
 	// person's roles on this item, in credit-list order.
@@ -108,6 +112,22 @@ type Subtitle struct {
 	// (signs, a line in another language): katalog-manager's isforced
 	// (migration 038). False on a catalog without the column.
 	Forced bool `json:"forced,omitempty"`
+	// StyledFormat is the format of the styled original its package keeps
+	// beside the subtitle's file — ass, an ASS or an SSA script — for a
+	// player that draws styles (katalog-manager's styledformat, migration
+	// 053); empty for a subtitle without one, and on a catalog without it.
+	// The subtitle itself is the file Format names, as before.
+	StyledFormat string `json:"styled_format,omitempty"`
+}
+
+// Font is a font file of the package an item plays: its id, the format its
+// bytes are (ttf, otf, ttc, woff, woff2; empty for none of them) and the
+// names a style or an override tag asks for it by. The stream services
+// resolve its id to its file (FontAsset).
+type Font struct {
+	ID     string   `json:"id"`
+	Format string   `json:"format,omitempty"`
+	Names  []string `json:"names"`
 }
 
 // Trailer mirrors chino-api's Trailer. site+externalId is enough for
