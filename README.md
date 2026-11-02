@@ -184,7 +184,8 @@ are:
  "previous": [{"versionId": "77c1d2e3-f405-4a6b-9c8d-0e1f2a3b4c5d",
                "dir": "/var/lib/katalog/movies/f0/f001aeff-9c18-4183-b51b-51403af2515e/versions/77c1d2e3-f405-4a6b-9c8d-0e1f2a3b4c5d",
                "record": "package.json"}],
- "original": {"path": "/var/lib/katalog/.work/incoming/Sintel (2010).mkv", "sourceId": "0b6c6a52-8d1e-4f3a-9b2c-1d4e5f6a7b8c"}}
+ "original": {"path": "/var/lib/katalog/.work/incoming/Sintel (2010).mkv", "sourceId": "0b6c6a52-8d1e-4f3a-9b2c-1d4e5f6a7b8c"},
+ "pictureArea": {"frameWidth": 1920, "frameHeight": 1080, "x": 0, "y": 138, "width": 1920, "height": 804}}
 ```
 
 - `package` is the package that plays: the item's complete version
@@ -198,9 +199,23 @@ are:
 - `original` is the file the item was taken in from (its primary asset), with
   the source it is (`sourceId`, `null` when the catalog does not say); `null`
   once it was retired after packaging, or when there is none.
+- `pictureArea` is the part of the frame the picture fills, in pixels of the
+  frame it was measured in. Many sources keep a full frame with a wider
+  picture letterboxed inside it, black bars baked into the video (a 1920x1080
+  frame whose picture is 1920x804 at y 138), or a narrower one pillarboxed; a
+  player fits the area to the screen rather than the frame. The analyzer
+  measures it and katalog-manager keeps it (its migration 054); it is the area
+  measured of what the item plays now, as 054's view
+  `com_nalet_katalog_currentpictureareas` holds it: its complete version, or
+  an original that version was made of; for an item without one, its original
+  or its package from before the library. Omitted when nothing is measured of
+  that (a measurement pending, unknown or failed says nothing, and a row of a
+  file the item no longer plays is none until the item is measured again),
+  when the picture fills the whole frame, and for a series.
 - `coveredBy` is sent for an episode held in the file of another, its holder,
-  whose package, previous versions and original these are (see [Episodes that
-  share a file](#episodes-that-share-a-file)); omitted for every other item.
+  whose package, previous versions, original and picture area these are (see
+  [Episodes that share a file](#episodes-that-share-a-file)); omitted for
+  every other item.
 - 404 for an id of no item.
 
 Before 040, and for an item packaged before the library, the package is the
@@ -220,12 +235,15 @@ folder, the record to read it by (`package.json` for an extra packaged into its
 title's folder in the library, `manifest.json` for one in the package store),
 the title it belongs to and when it was packaged. 404 unless the extra is
 packaged and not removed; a hidden one, or one whose original went missing,
-still plays by its id.
+still plays by its id. Its `pictureArea` is the one measured of its package
+(in the library, the package of its package id), and is omitted as an item's
+is: a row of the package it had before it was packaged anew is none.
 
 ```json
 {"extraId": "2b7c9e10-3d4f-4a5b-8c6d-7e8f9a0b1c2d", "itemId": "ea886f9b-0d06-4f0f-babb-d2a1162f9b01",
  "dir": "/var/lib/katalog/movies/ea/ea886f9b-0d06-4f0f-babb-d2a1162f9b01/extras/2b7c9e10-3d4f-4a5b-8c6d-7e8f9a0b1c2d",
- "record": "package.json", "packagedAt": "2026-10-06T11:00:00Z"}
+ "record": "package.json", "packagedAt": "2026-10-06T11:00:00Z",
+ "pictureArea": {"frameWidth": 1920, "frameHeight": 1080, "x": 0, "y": 132, "width": 1920, "height": 816}}
 ```
 
 `GET /api/v1/packaged-ids` answers `{"ids": [...]}`: the movies and episodes
@@ -241,7 +259,10 @@ may not read them until it is granted them (`GRANT SELECT ON
 com_nalet_katalog_itemversions TO <role>`; 040 grants `cloud_katalog_ro`).
 Until then an item is answered from its packaged asset, which in the library
 is its version's `package.json`, so the same folder plays, with nothing
-previous.
+previous. Likewise for 054's view (`GRANT SELECT ON
+com_nalet_katalog_currentpictureareas TO <role>`; 054 grants
+`cloud_katalog_ro`, and the view reads the table beneath it as its owner):
+until then, and on a catalog without 054, the answers leave `pictureArea` out.
 
 ## Styled subtitles and fonts
 
@@ -309,7 +330,7 @@ an item of its own (its title, its numbers) and no file, and names the holder
 
 - A covered episode plays its holder's file, and is playable exactly when the
   holder is: `/items/{id}/playback` answers it the holder's package, previous
-  versions and original, and names the holder in `coveredBy`;
+  versions, original and picture area, and names the holder in `coveredBy`;
   `/items/{id}/asset` answers the holder's file; `/packaged-ids` lists it when
   the holder has a package. Whatever a covered episode holds itself is not
   read.
@@ -482,7 +503,7 @@ The store and handler tests that need PostgreSQL are skipped unless
 `KATALOG_API_TEST_DATABASE_URL` names a database in which they may create
 and drop schemas and roles (each test makes its own schema, with the catalog
 tables before and after the migrations it reads: 030, 032, 036, 038, 039, 040,
-045, 046 and 049). CI runs them against PostgreSQL 16. The search's golden
+045, 046, 049 and 054). CI runs them against PostgreSQL 16. The search's golden
 queries (`internal/store/search_test.go`) rank a fixture catalog as a viewer
 should see it.
 A throwaway server:

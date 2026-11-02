@@ -247,17 +247,19 @@ paths:
       description: >
         For the stream services, which play what it names: the package that
         plays, the superseded versions a running session may still finish
-        on, and the file the item was taken in from while there is one.
+        on, the file the item was taken in from while there is one, and the
+        part of the frame its picture fills when the analyzer measured bars
+        in what it plays (katalog-manager's migration 054).
         katalog-manager records every path of the library, so a stream
         service computes none. Before katalog-manager's migration 040, and for
         an item packaged before the library, the package is the folder of the
         item's packaged asset, read by its manifest.json, with no version and
         nothing previous; so too while the role may not read the versions.
         An episode held in the file of another, its holder (katalog-manager's
-        migration 045), is answered the holder's package, previous versions
-        and original, and names the holder in coveredBy: it plays exactly
-        when the holder does. It applies no rating cap and takes no bearer:
-        the Service is in-cluster only, as for the asset lookups.
+        migration 045), is answered the holder's package, previous versions,
+        original and picture area, and names the holder in coveredBy: it
+        plays exactly when the holder does. It applies no rating cap and takes
+        no bearer: the Service is in-cluster only, as for the asset lookups.
       parameters:
         - in: path
           name: id
@@ -278,10 +280,11 @@ paths:
       summary: Where an extra's package is (internal)
       description: >
         For the stream services: the folder of an extra's package, the record
-        to read it by, the title it belongs to and when it was packaged. An
-        extra plays by its id while it is packaged and not removed, also when
-        it is hidden or its original went missing. It takes no bearer: the
-        Service is in-cluster only, as for the asset lookups.
+        to read it by, the title it belongs to, when it was packaged, and the
+        part of the frame its picture fills when the analyzer measured bars
+        in its package. An extra plays by its id while it is packaged and not
+        removed, also when it is hidden or its original went missing. It takes
+        no bearer: the Service is in-cluster only, as for the asset lookups.
       parameters:
         - in: path
           name: extraId
@@ -1012,8 +1015,9 @@ components:
           type: string
           description: >
             On an episode held in the file of another: the id of the file's
-            holder, whose package, previous versions and original these are.
-            Omitted for every other item, the holder among them.
+            holder, whose package, previous versions, original and picture
+            area these are. Omitted for every other item, the holder among
+            them.
         package:
           description: >
             The package that plays: the item's complete version, else (before
@@ -1037,6 +1041,18 @@ components:
           oneOf:
             - $ref: "#/components/schemas/Original"
             - type: "null"
+        pictureArea:
+          description: >
+            The part of the frame the picture fills, as the analyzer measured
+            it of what the item plays now: of its complete version, or of an
+            original that version was made of; for an item without one, of
+            its original or of its package from before the library. Omitted
+            when nothing is measured of it (a row of another file, one the
+            item no longer plays, is none), when the picture fills the whole
+            frame, and for a series; and before katalog-manager's migration
+            054, or while the role may not read its view.
+          allOf:
+            - $ref: "#/components/schemas/PictureArea"
     PackageRef:
       type: object
       required: [versionId, dir, record]
@@ -1068,6 +1084,48 @@ components:
         sourceId:
           type: [string, "null"]
           description: The source the file is; null when the catalog does not say.
+    PictureArea:
+      type: object
+      required: [frameWidth, frameHeight, x, y, width, height]
+      description: >
+        The part of a video's frame its picture fills, in pixels of the frame
+        it was measured in. Many sources keep a full frame with a wider
+        picture letterboxed inside it, black bars baked into the video above
+        and below it, or a narrower one pillarboxed, with bars at its sides;
+        a player fits this area to the screen rather than the frame. The area
+        is rounded outwards to even pixels, and never the whole frame: a
+        picture that fills it has none.
+      properties:
+        frameWidth:
+          type: integer
+          minimum: 1
+          description: The frame's width as the video codes it, bars included.
+          example: 1920
+        frameHeight:
+          type: integer
+          minimum: 1
+          description: The frame's height as the video codes it, bars included.
+          example: 1080
+        x:
+          type: integer
+          minimum: 0
+          description: The area's left edge, in pixels from the frame's.
+          example: 0
+        "y":
+          type: integer
+          minimum: 0
+          description: The area's top edge, in pixels from the frame's.
+          example: 138
+        width:
+          type: integer
+          minimum: 1
+          description: The area's width; x plus width is at most frameWidth.
+          example: 1920
+        height:
+          type: integer
+          minimum: 1
+          description: The area's height; y plus height is at most frameHeight.
+          example: 804
     ExtraPlayback:
       type: object
       required: [extraId, itemId, dir, record, packagedAt]
@@ -1090,3 +1148,14 @@ components:
           type: string
           format: date-time
           description: When it was packaged, in UTC.
+        pictureArea:
+          description: >
+            The part of the frame the picture fills, as the analyzer measured
+            it of the extra's package: in the library the one of its package
+            id, before it a file in its package's folder. Omitted when
+            nothing is measured of it (a row of a package it had before it
+            was packaged anew is none) and when the picture fills the whole
+            frame; and before katalog-manager's migration 054, or while the
+            role may not read its view.
+          allOf:
+            - $ref: "#/components/schemas/PictureArea"
