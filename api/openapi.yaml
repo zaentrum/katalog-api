@@ -616,6 +616,23 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/CastEntry"
+        subtitles:
+          description: >
+            With include=subtitles. The sidecar subtitles of the file the item
+            plays, the default first, then by language.
+          type: array
+          items:
+            $ref: "#/components/schemas/Subtitle"
+        fonts:
+          description: >
+            With include=subtitles. The fonts of the package the item plays,
+            which its styled subtitles (styled_format) are drawn with, in
+            their order (katalog-manager's migration 053). Omitted when the
+            package carries none, and on a catalog without them (053, or
+            SELECT on its table, missing).
+          type: array
+          items:
+            $ref: "#/components/schemas/Font"
         extras:
           description: >
             With include=extras, on a movie or a series. Its extras that play:
@@ -855,6 +872,59 @@ components:
             On a series' extra that belongs to a season only: that season, 0
             for the specials. Omitted for an extra of the series as a whole,
             and of a movie.
+    Subtitle:
+      type: object
+      required: [id]
+      description: One sidecar subtitle. Every optional field is omitted when unknown or false.
+      properties:
+        id:
+          type: string
+        lang:
+          type: string
+          example: en
+        label:
+          type: string
+        format:
+          type: string
+          description: The format of the subtitle's file, the one every client plays.
+          example: webvtt
+        default:
+          type: boolean
+        forced:
+          type: boolean
+          description: >
+            A subtitle a player shows by itself for the language it is in
+            (katalog-manager's migration 038).
+        styled_format:
+          type: string
+          enum: [ass]
+          description: >
+            The format of the styled original the package keeps beside the
+            subtitle's file, for a player that draws styles: ass, an ASS or an
+            SSA script (katalog-manager's migration 053). Omitted for a
+            subtitle without one. The subtitle itself stays the file format
+            names.
+    Font:
+      type: object
+      required: [id, names]
+      description: A font file of the package an item plays.
+      properties:
+        id:
+          type: string
+          description: The font's id, the same for the same font of the same package.
+        format:
+          type: string
+          enum: [ttf, otf, ttc, woff, woff2]
+          description: The format its bytes are; omitted for bytes that are none of them.
+        names:
+          type: array
+          items:
+            type: string
+          description: >
+            The names a style or an override tag asks for it by: its family,
+            its full name and its PostScript name, as the font's name table
+            gives them. Empty when the font names none the packager could read.
+          example: ["Example Sans", "Example Sans Bold", "ExampleSans-Bold"]
     Person:
       type: object
       required: [id, name, has_profile]

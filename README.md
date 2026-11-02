@@ -243,6 +243,42 @@ Until then an item is answered from its packaged asset, which in the library
 is its version's `package.json`, so the same folder plays, with nothing
 previous.
 
+## Styled subtitles and fonts
+
+A styled subtitle (an ASS or an SSA script) is packaged as every subtitle is,
+its WebVTT file the one every client plays, and its package keeps the script
+as it was beside it, with the fonts the original carried (katalog-manager's
+migration 053). A player that draws styles (libass) reads the script and loads
+the fonts; every other client is served what it was before.
+
+- With `include=subtitles` a subtitle whose package keeps its script sends
+  `styled_format`, the script's format (`ass`); the rest of its entry is as
+  before. The item sends `fonts`, the fonts of the package it plays, in their
+  order: each its `id`, its `format` (`ttf`, `otf`, `ttc`, `woff`, `woff2`;
+  omitted for bytes that are none of them) and the `names` a style asks for
+  it by. Omitted when the package carries none.
+- `GET /api/v1/subtitles/{id}/asset` answers, beside the subtitle's file,
+  `styledPath` and `styledFormat`, the script's file and format, for a
+  subtitle that has one.
+- `GET /api/v1/fonts/{id}/asset` answers a font's file as the subtitle's
+  asset route answers a subtitle's: `{"itemId", "path", "format"}`, 404 for an
+  id of no font. Like the asset routes it takes no bearer.
+
+```json
+"subtitles": [
+  {"id": "3c1f…", "lang": "en", "label": "English", "format": "webvtt", "default": true, "styled_format": "ass"}
+],
+"fonts": [
+  {"id": "9b0e…", "format": "ttf", "names": ["Example Sans", "Example Sans Regular", "ExampleSans-Regular"]}
+]
+```
+
+On a catalog without 053 no subtitle has a script, no item has fonts and no
+font is found. A read-only role granted the catalog's tables before 053
+created the fonts' table may not read it until it is granted it (`GRANT SELECT
+ON com_nalet_katalog_fontassets TO <role>`; 053 grants `cloud_katalog_ro`);
+until then an item has no fonts, rather than failing.
+
 ## Episodes that share a file
 
 One file may hold two episodes or more (a double-length finale). It is never
