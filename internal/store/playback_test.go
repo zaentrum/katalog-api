@@ -348,6 +348,13 @@ func TestThePictureAreaOfWhatAnItemPlays(t *testing.T) {
 		}
 	}
 
+	// m7's measurement read its pixels as 64:45: its picture has the shape
+	// of its package of square pixels, and the area is of what it plays.
+	db.Exec(t, `UPDATE com_nalet_katalog_pictureareas SET sampling = '{"video": {"sar": "64:45"}}' WHERE id = 'm7'`)
+	if got, w := areaOf(t, st, "m7"), area(720, 576, 0, 70, 720, 436); got != w {
+		t.Errorf("m7 with its pixel aspect: %s, want %s", got, w)
+	}
+
 	// m8 is measured again, of the version it plays now.
 	db.Exec(t, `UPDATE com_nalet_katalog_pictureareas SET path = $1, sourceid = 'src-m8', versionid = 'v-m8',
 		areay = 140, areaheight = 800 WHERE id = 'm8'`, versions("m8")+"v-m8"+video)
