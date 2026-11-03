@@ -207,9 +207,11 @@ are:
   measures it and katalog-manager keeps it (its migration 054); it is the area
   measured of what the item plays now, as 054's view
   `com_nalet_katalog_currentpictureareas` holds it: its complete version, or
-  an original that version was made of whose frame has the shape of the
-  version's package (an anamorphic original, packaged with square pixels, is
-  measured again of its package); for an item without one, its original (of
+  an original that version was made of whose picture has the shape of the
+  version's package (its frame's display aspect, with the pixel aspect the
+  measurement read: an anamorphic original's area holds for its package of
+  square pixels, one of another shape is measured again); for an item without
+  one, its original (of
   its source, and of the size it has) or its package from before the
   library. Omitted when nothing is measured of
   that (a measurement pending, unknown or failed says nothing, and a row of a
