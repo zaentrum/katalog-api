@@ -157,16 +157,18 @@ func TestThePictureAreaOnTheWire(t *testing.T) {
 		source = "0b6c6a52-8d1e-4f3a-9b2c-1d4e5f6a7b8c"
 	)
 	fdir, odir := "/var/lib/katalog/movies/f0/"+film, "/var/lib/katalog/movies/ea/"+other
-	db.Exec(t, `INSERT INTO com_nalet_katalog_items (id, type, title) VALUES ($1, 'movie', 'Sintel'), ($2, 'movie', 'Tears of Steel')`,
+	db.Exec(t, `INSERT INTO com_nalet_katalog_items (id, type, title) VALUES ($1, 'movie', 'A Film'), ($2, 'movie', 'Another Film')`,
 		film, other)
 	db.Exec(t, `INSERT INTO com_nalet_katalog_itemversions (id, item_id, sourceids, state, packageid, dir, completedat) VALUES
 		($1, $2, $3,   'complete', 'p2', $4, '2026-10-06 09:00:00+00'),
 		($5, $6, '{}', 'complete', 'p3', $7, '2026-10-06 10:00:00+00')`,
 		v2, film, []string{source}, fdir+"/versions/"+v2, w1, other, odir+"/versions/"+w1)
-	db.Exec(t, `INSERT INTO com_nalet_katalog_playbackassets (id, item_id, path, isprimary, kind, sourceid, versionid) VALUES
-		('a1', $1, '/var/lib/katalog/.work/incoming/Sintel (2010).mkv', true, 'primary', $2, NULL),
-		('a2', $1, $3, false, 'packaged', NULL, $4),
-		('a3', $5, $6, false, 'packaged', NULL, $7)`,
+	// the packaged rows as the handover writes them: their video's size
+	db.Exec(t, `INSERT INTO com_nalet_katalog_playbackassets (id, item_id, path, isprimary, kind, sourceid, versionid,
+			resolution) VALUES
+		('a1', $1, '/var/lib/katalog/.work/incoming/A Film (2010).mkv', true, 'primary', $2, NULL, NULL),
+		('a2', $1, $3, false, 'packaged', NULL, $4, '1920x1080'),
+		('a3', $5, $6, false, 'packaged', NULL, $7, '1920x1080')`,
 		film, source, fdir+"/versions/"+v2+"/package.json", v2, other, odir+"/versions/"+w1+"/package.json", w1)
 	db.Exec(t, `INSERT INTO com_nalet_katalog_itemextras (id, item_id, kind, title, registeredby, state, packagepath, packagedat,
 			packageid, recordedat)
@@ -177,7 +179,7 @@ func TestThePictureAreaOnTheWire(t *testing.T) {
 	db.Exec(t, `INSERT INTO com_nalet_katalog_pictureareas
 			(id, kind, item_id, state, framewidth, frameheight, areax, areay, areawidth, areaheight, path, sourceid, versionid, packageid)
 		VALUES
-		($1, 'item',  $1, 'measured', 1920, 1080, 0, 138, 1920, 804,  '/var/lib/katalog/.work/incoming/Sintel (2010).mkv', $2, NULL, NULL),
+		($1, 'item',  $1, 'measured', 1920, 1080, 0, 138, 1920, 804,  '/var/lib/katalog/.work/incoming/A Film (2010).mkv', $2, NULL, NULL),
 		($3, 'item',  $3, 'measured', 1920, 1080, 0, 0,   1920, 1080, $4, NULL, $5,   NULL),
 		($6, 'extra', $3, 'measured', 1920, 1080, 0, 132, 1920, 816,  $7, NULL, NULL, 'p4')`,
 		film, source, other, odir+"/versions/"+w1+"/hls/v0/playlist.m3u8", w1, extra, odir+"/extras/"+extra+"/hls/v0/playlist.m3u8")
@@ -185,7 +187,7 @@ func TestThePictureAreaOnTheWire(t *testing.T) {
 	for path, want := range map[string]string{
 		"/api/v1/items/" + film + "/playback": `{"itemId":"` + film + `","type":"movie",` +
 			`"package":{"versionId":"` + v2 + `","dir":"` + fdir + `/versions/` + v2 + `","record":"package.json","completedAt":"2026-10-06T09:00:00Z"},` +
-			`"previous":[],"original":{"path":"/var/lib/katalog/.work/incoming/Sintel (2010).mkv","sourceId":"` + source + `"},` +
+			`"previous":[],"original":{"path":"/var/lib/katalog/.work/incoming/A Film (2010).mkv","sourceId":"` + source + `"},` +
 			`"pictureArea":{"frameWidth":1920,"frameHeight":1080,"x":0,"y":138,"width":1920,"height":804}}`,
 		"/api/v1/items/" + other + "/playback": `{"itemId":"` + other + `","type":"movie",` +
 			`"package":{"versionId":"` + w1 + `","dir":"` + odir + `/versions/` + w1 + `","record":"package.json","completedAt":"2026-10-06T10:00:00Z"},` +

@@ -240,9 +240,9 @@ func TestThePictureAreaOnACatalogOlderThan054(t *testing.T) {
 	dir, xdir := lib+"/movies/m1/m1/versions/v1", lib+"/movies/m1/m1/extras/x1"
 	db.Exec(t, `INSERT INTO com_nalet_katalog_itemversions (id, item_id, sourceids, state, dir, completedat)
 		VALUES ('v1', 'm1', '{src1}', 'complete', $1, '2026-10-06 09:00:00+00')`, dir)
-	db.Exec(t, `INSERT INTO com_nalet_katalog_playbackassets (id, item_id, path, isprimary, kind, sourceid, versionid) VALUES
-		('a1', 'm1', $1, true,  'primary',  'src1', NULL),
-		('a2', 'm1', $2, false, 'packaged', NULL,   'v1')`, lib+"/.work/incoming/A Film (2001).mkv", dir+"/package.json")
+	db.Exec(t, `INSERT INTO com_nalet_katalog_playbackassets (id, item_id, path, isprimary, kind, sourceid, versionid, resolution) VALUES
+		('a1', 'm1', $1, true,  'primary',  'src1', NULL, NULL),
+		('a2', 'm1', $2, false, 'packaged', NULL,   'v1', '1280x720')`, lib+"/.work/incoming/A Film (2001).mkv", dir+"/package.json")
 	db.Exec(t, `INSERT INTO com_nalet_katalog_itemextras (id, item_id, kind, title, registeredby, state, packagepath, packagedat, packageid)
 		VALUES ('x1', 'm1', 'trailer', 'Trailer', 'api', 'ready', $1, '2026-10-06 10:00:00+00', 'p1')`, xdir)
 	film := `{"itemId":"m1","type":"movie",` +
@@ -288,14 +288,22 @@ func TestThePictureAreaOnACatalogOlderThan054(t *testing.T) {
 func TestThePictureAreaOfWhatAnItemPlays(t *testing.T) {
 	st, db := open(t)
 	db.Migrate054(t)
-	movies := []string{"m1", "m2", "m3", "m4", "m5", "m6", "m8", "m9"}
+	movies := []string{"m1", "m2", "m3", "m4", "m5", "m6", "m7", "m8", "m9"}
 	versions := func(item string) string { return lib + "/movies/" + item + "/" + item + "/versions/" }
 	for _, id := range movies {
 		addItem(t, db, id, "movie", "A Film", 2001, 7)
-		// Each plays its complete version v-<id>, made of its original src-<id>.
+		// Each plays its complete version v-<id>, made of its original src-<id>,
+		// its packaged row as the handover writes it (its video's size); m7's
+		// original is an anamorphic disc's, packaged with square pixels.
 		db.Exec(t, `INSERT INTO com_nalet_katalog_itemversions (id, item_id, sourceids, state, dir, completedat)
 			VALUES ($1, $2, $3, 'complete', $4, '2026-10-06 09:00:00+00')`,
 			"v-"+id, id, []string{"src-" + id}, versions(id)+"v-"+id)
+		size := "1920x1080"
+		if id == "m7" {
+			size = "1024x576"
+		}
+		db.Exec(t, `INSERT INTO com_nalet_katalog_playbackassets (id, item_id, path, isprimary, kind, versionid, resolution)
+			VALUES ($1, $2, $3, false, 'packaged', $4, $5)`, "p-"+id, id, versions(id)+"v-"+id+"/package.json", "v-"+id, size)
 	}
 	// m8's file was replaced: it played v-m8-old, made of another original.
 	db.Exec(t, `INSERT INTO com_nalet_katalog_itemversions (id, item_id, sourceids, state, dir, completedat, supersededat)
@@ -312,13 +320,15 @@ func TestThePictureAreaOfWhatAnItemPlays(t *testing.T) {
 		('m4', 'item', 'm4', 'pending',  1920, 1080, 0,    138,  1920, 804,  $4, 'src-m4',     NULL,       NULL),
 		('m5', 'item', 'm5', 'unknown',  1920, 1080, 0,    138,  1920, 804,  $5, 'src-m5',     NULL,       NULL),
 		('m6', 'item', 'm6', 'failed',   1920, 1080, 0,    138,  1920, 804,  $6, 'src-m6',     NULL,       NULL),
+		('m7', 'item', 'm7', 'measured', 720,  576,  0,    70,   720,  436,  $9, 'src-m7',     NULL,       NULL),
 		('m8', 'item', 'm8', 'measured', 1920, 1080, 0,    138,  1920, 804,  $7, 'src-m8-old', 'v-m8-old', NULL),
 		('s1', 'item', 's1', 'measured', 1920, 1080, 0,    138,  1920, 804,  $8, NULL,         NULL,       NULL)`,
 		original("m1"), versions("m2")+"v-m2"+video, original("m3"), original("m4"), original("m5"), original("m6"),
-		versions("m8")+"v-m8-old"+video, lib+"/packages/items/s1/s1"+video)
+		versions("m8")+"v-m8-old"+video, lib+"/packages/items/s1/s1"+video, original("m7"))
 
-	// The view leaves out m8's row alone; the others are left out as they
-	// are read.
+	// The view leaves out m8's row (of another file) and m7's (of a frame
+	// of another shape than its package's) alone; the others are left out
+	// as they are read.
 	var current string
 	if err := db.Pool.QueryRow(context.Background(),
 		`SELECT string_agg(id, ' ' ORDER BY id) FROM com_nalet_katalog_currentpictureareas`).Scan(&current); err != nil {
@@ -330,7 +340,7 @@ func TestThePictureAreaOfWhatAnItemPlays(t *testing.T) {
 
 	for item, w := range map[string]string{
 		"m1": area(1920, 1080, 0, 138, 1920, 804), "m2": area(3840, 2160, 0, 276, 3840, 1608),
-		"m3": "-", "m4": "-", "m5": "-", "m6": "-", "m8": "-", "m9": "-", "s1": "-",
+		"m3": "-", "m4": "-", "m5": "-", "m6": "-", "m7": "-", "m8": "-", "m9": "-", "s1": "-",
 		"nothing": "not found",
 	} {
 		if got := areaOf(t, st, item); got != w {
