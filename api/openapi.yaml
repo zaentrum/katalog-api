@@ -1045,8 +1045,10 @@ components:
           description: >
             The part of the frame the picture fills, as the analyzer measured
             it of what the item plays now: of its complete version, or of an
-            original that version was made of; for an item without one, of
-            its original or of its package from before the library. Omitted
+            original that version was made of whose frame has the shape of
+            the version's package; for an item without one, of its original
+            (its source, the size it has) or of its package from before the
+            library. Omitted
             when nothing is measured of it (a row of another file, one the
             item no longer plays, is none), when the picture fills the whole
             frame, and for a series; and before katalog-manager's migration
