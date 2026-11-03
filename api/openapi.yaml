@@ -628,8 +628,9 @@ components:
             With include=subtitles. The fonts of the package the item plays,
             which its styled subtitles (styled_format) are drawn with, in
             their order (katalog-manager's migration 053). Omitted when the
-            package carries none, and on a catalog without them (053, or
-            SELECT on its table, missing).
+            package carries none, when none of the item's subtitles has a
+            styled_format, and on a catalog without them (053, or SELECT on
+            its table, missing).
           type: array
           items:
             $ref: "#/components/schemas/Font"

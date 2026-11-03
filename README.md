@@ -256,7 +256,8 @@ the fonts; every other client is served what it was before.
   before. The item sends `fonts`, the fonts of the package it plays, in their
   order: each its `id`, its `format` (`ttf`, `otf`, `ttc`, `woff`, `woff2`;
   omitted for bytes that are none of them) and the `names` a style asks for
-  it by. Omitted when the package carries none.
+  it by. Omitted when the package carries none, and when none of the item's
+  subtitles keeps a styled original: the fonts are for those alone.
 - `GET /api/v1/subtitles/{id}/asset` answers, beside the subtitle's file,
   `styledPath` and `styledFormat`, the script's file and format, for a
   subtitle that has one.
