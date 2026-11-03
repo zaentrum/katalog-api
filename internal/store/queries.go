@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
@@ -524,11 +525,15 @@ func (s *Store) GetItemWithIncludes(ctx context.Context, id string, inc IncludeO
 			return Item{}, err
 		}
 		it.Subtitles = ss
-		fs, err := s.listFontsFor(ctx, file)
-		if err != nil {
-			return Item{}, err
+		// the fonts are for the styled originals alone: of an item none of
+		// whose subtitles keeps one, none is listed
+		if slices.ContainsFunc(ss, func(s Subtitle) bool { return s.StyledFormat != "" }) {
+			fs, err := s.listFontsFor(ctx, file)
+			if err != nil {
+				return Item{}, err
+			}
+			it.Fonts = fs
 		}
-		it.Fonts = fs
 	}
 	if inc.Trailers {
 		ts, err := s.listTrailersFor(ctx, id)

@@ -57,7 +57,8 @@ type Item struct {
 	Subtitles []Subtitle  `json:"subtitles,omitempty"`
 	// Fonts are the fonts of the package the item plays, which its styled
 	// subtitles are drawn with (katalog-manager's migration 053), in their
-	// order; given with the subtitles, and none of a catalog without them.
+	// order; given with the subtitles when one of them keeps a styled
+	// original, and none of a catalog without them.
 	Fonts    []Font      `json:"fonts,omitempty"`
 	Trailers []Trailer   `json:"trailers,omitempty"`
 	Extras   []Extra     `json:"extras,omitempty"`

@@ -35,7 +35,8 @@ func TestAnItemSaysItsStyledSubtitlesAndFonts(t *testing.T) {
 	db.Exec(t, `INSERT INTO com_nalet_katalog_subtitleassets (id, item_id, path, format, lang, styledpath, styledformat) VALUES
 		('s1', 'm1', '/v/subs/0.vtt', 'webvtt', 'eng', '/v/subs/0.ass', 'ass'),
 		('s2', 'm1', '/v/subs/1.vtt', 'webvtt', 'ger', NULL, NULL),
-		('s3', 'm1', '/v/subs/2.sup', 'pgs', 'fre', NULL, 'ass')`)
+		('s3', 'm1', '/v/subs/2.sup', 'pgs', 'fre', NULL, 'ass'),
+		('t1', 'm2', '/p/subs/0.vtt', 'webvtt', 'eng', '/p/subs/0.ass', 'ass')`)
 	db.Exec(t, `INSERT INTO com_nalet_katalog_fontassets (id, item_id, versionid, path, format, names, ordinal) VALUES
 		('f2', 'm1', 'v', '/v/subs/fonts/1.bin', NULL, '[]', 1),
 		('f1', 'm1', 'v', '/v/subs/fonts/0.ttf', 'ttf', '["Example Sans", "ExampleSans-Regular"]', 0),
@@ -45,7 +46,7 @@ func TestAnItemSaysItsStyledSubtitlesAndFonts(t *testing.T) {
 	if want := `s1:webvtt:ass s3:pgs: s2:webvtt: | f1:ttf:["Example Sans" "ExampleSans-Regular"] f2::[]`; err != nil || got != want {
 		t.Errorf("m1: %q %v, want %q", got, err, want)
 	}
-	if got, err := styledOf(ctx, t, st, "m2"); err != nil || got != `| g1:otf:["Example Serif"]` {
+	if got, err := styledOf(ctx, t, st, "m2"); err != nil || got != `t1:webvtt:ass | g1:otf:["Example Serif"]` {
 		t.Errorf("m2: %q %v", got, err)
 	}
 	// What a stream service resolves an id to.
@@ -115,5 +116,25 @@ func TestFontsWhenTheRoleMayNotReadThem(t *testing.T) {
 	db.Exec(t, `GRANT SELECT ON com_nalet_katalog_fontassets TO `+role)
 	if got, err := styledOf(ctx, t, st, "m1"); err != nil || got != `s1:webvtt:ass | f1:ttf:["Example Sans"]` {
 		t.Errorf("with the grant: %q %v", got, err)
+	}
+}
+
+// The fonts are the styled originals': an item none of whose subtitles keeps
+// one lists none, whatever its package carries, and lists them once one does.
+func TestAnItemListsItsFontsBesideAStyledSubtitleAlone(t *testing.T) {
+	st, db := open(t)
+	db.Migrate053(t)
+	addItem(t, db, "m1", "movie", "A Film", 2001, 7)
+	db.Exec(t, `INSERT INTO com_nalet_katalog_subtitleassets (id, item_id, path, format, lang)
+		VALUES ('s1', 'm1', '/v/subs/0.vtt', 'webvtt', 'eng')`)
+	db.Exec(t, `INSERT INTO com_nalet_katalog_fontassets (id, item_id, path, format, names, ordinal)
+		VALUES ('f1', 'm1', '/v/subs/fonts/0.ttf', 'ttf', '["Example Sans"]', 0)`)
+	ctx := context.Background()
+	if got, err := styledOf(ctx, t, st, "m1"); err != nil || got != "s1:webvtt: |" {
+		t.Errorf("no styled subtitle: %q %v", got, err)
+	}
+	db.Exec(t, `UPDATE com_nalet_katalog_subtitleassets SET styledpath = '/v/subs/0.ass', styledformat = 'ass'`)
+	if got, err := styledOf(ctx, t, st, "m1"); err != nil || got != `s1:webvtt:ass | f1:ttf:["Example Sans"]` {
+		t.Errorf("a styled subtitle: %q %v", got, err)
 	}
 }

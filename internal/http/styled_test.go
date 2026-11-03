@@ -15,8 +15,9 @@ import (
 // A styled subtitle on the wire, with include=subtitles: its entry is the
 // one every client reads, with styled_format beside it, and the item's fonts
 // come with the subtitles, each by its id, its format when it has one and the
-// names it is asked for by. An item without fonts, or asked for without its
-// subtitles, has no fonts field. The stream services resolve a subtitle's
+// names it is asked for by. An item without fonts, one none of whose
+// subtitles keeps a styled original whatever fonts its package carries, or
+// one asked for without its subtitles, has no fonts field. The stream services resolve a subtitle's
 // styled original and a font by their ids, and a font of no id is not found.
 func TestStyledSubtitlesAndFontsOnTheWire(t *testing.T) {
 	db := storetest.Open(t)
@@ -28,7 +29,8 @@ func TestStyledSubtitlesAndFontsOnTheWire(t *testing.T) {
 		       ('s3', 'm2', '/w/subs/0.vtt', 'webvtt', 'en', 'English', true, NULL, NULL)`)
 	db.Exec(t, `INSERT INTO com_nalet_katalog_fontassets (id, item_id, versionid, path, format, names, ordinal) VALUES
 		('f1', 'm1', 'v', '/v/subs/fonts/0.ttf', 'ttf', '["Example Sans", "ExampleSans-Regular"]', 0),
-		('f2', 'm1', 'v', '/v/subs/fonts/1.bin', NULL, '[]', 1)`)
+		('f2', 'm1', 'v', '/v/subs/fonts/1.bin', NULL, '[]', 1),
+		('g1', 'm2', 'w', '/w/subs/fonts/0.ttf', 'ttf', '["Example Serif"]', 0)`)
 	h := &ItemsHandler{Store: &store.Store{Pool: db.Pool}}
 	r := chi.NewRouter()
 	r.Get("/items/{id}", h.Get)
