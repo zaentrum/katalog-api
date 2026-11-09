@@ -1,8 +1,8 @@
 # katalog-api
 
-Read-only catalog REST API for the zaentrum platform. Wraps the catalog
-Postgres tables under the `cloud_katalog_ro` role and serves product apps
-(`chino-web`, `tv-web`, `musig-web`) and edge consumers via OpenAPI 3.1.
+Read-only catalog REST API for the zaentrum platform. It reads the catalog's
+Postgres tables and serves the platform's services — chino-api, chino-stream
+and katalog-ingest — via OpenAPI 3.1; the apps reach it through chino-api.
 
 ## Status
 
@@ -14,9 +14,10 @@ The surface is described in [`api/openapi.yaml`](api/openapi.yaml).
 ## Design
 
 - Catalog read/write split: this service is the **read** half; all writes go
-  through `katalog-manager-api`.
-- `katalog-api` only ever runs SELECTs under the `cloud_katalog_ro` Postgres
-  role, so it is stateless and HPA-scalable.
+  through `katalog-manager`.
+- `katalog-api` only ever runs SELECTs, so it is stateless and scales out. The
+  operator's chart runs it on the platform's database login; a read-only role
+  of its own is up to the installation.
 
 ## Search
 
@@ -25,7 +26,10 @@ series and episodes ranked together by how they match the query, best first,
 and the people whose names match it, ranked apart:
 `{"items": [...], "people": [...]}`. `types=` names the types of title to
 look at (`movie,series,episode`, the default), `limit=` how many titles
-(30, at most 100), `people=` how many people (12, at most 50; 0 none).
+(30, at most 100), `people=` how many people (12, at most 50; 0 none). The
+search is PostgreSQL's own — the normalized, trigram-indexed columns of
+katalog-manager's migration 049 (`pg_trgm`, `unaccent`), on a catalog without
+it the `search_vector` — and no search engine runs beside the database.
 
 A title, a name and a plot are read normalized, as katalog-manager's
 migration 049 indexes them: lower case, accents off, apostrophes dropped,
@@ -88,7 +92,8 @@ the same with episodes in up to 25 ms; the people in 1–12 ms.
   (`sort_name`, `also_known_as`, `birth_date`, `death_date`, `birthplace`,
   `known_for_department`, `tmdb_person_id`, `imdb_id`), one `biography` with
   its `biography_lang`, `has_profile`, and their filmography with their
-  `roles` on each title. The biography is in the language `?lang=` names,
+  `roles` on each title, newest first: by year, then by rating, then by
+  title. The biography is in the language `?lang=` names,
   else the first of `Accept-Language`'s the catalog has, else English, else
   any.
 - The portrait itself is served by katalog-manager at
